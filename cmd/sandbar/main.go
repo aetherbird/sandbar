@@ -1416,8 +1416,11 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 	threadID := m.sess.threadID
 	modelAlias := m.sess.modelAlias
 	// Cost rollups price this turn's usage events against the catalog; nil
-	// (unknown/free model) leaves every segment hidden.
-	costs := newCostTracker(m.sess.cfg, modelAlias)
+	// (disabled, unknown, or free model) leaves every segment hidden.
+	var costs *costTracker
+	if m.sess.clientCfg != nil && m.sess.clientCfg.ShowCost {
+		costs = newCostTracker(m.sess.cfg, modelAlias)
+	}
 
 	go func() {
 		defer cancel()
@@ -3117,7 +3120,7 @@ func main() {
 		}
 	}
 	if message != "" || piped {
-		if err := runOneShot(runtime.backend, runtime.cfg, modelAlias, resumeID, message, effortAllow, *planFlag, *jsonFlag, os.Stdin, piped, os.Stdout, os.Stderr); err != nil {
+		if err := runOneShot(runtime.backend, runtime.cfg, modelAlias, resumeID, message, effortAllow, *planFlag, *jsonFlag, clientCfg.ShowCost, os.Stdin, piped, os.Stdout, os.Stderr); err != nil {
 			die("turn: %v", err)
 		}
 		return
@@ -3251,7 +3254,7 @@ func runSummarizeContext(cfg *config.Config, modelAlias string, positional []str
 
 // ── One-shot mode ─────────────────────────────────────────────────────────────
 
-func runOneShot(be backend.Backend, cfg *config.Config, modelAlias, resumeID, message, effort string, plan bool, jsonOut bool, input io.Reader, piped bool, output, errorOutput io.Writer) error {
+func runOneShot(be backend.Backend, cfg *config.Config, modelAlias, resumeID, message, effort string, plan bool, jsonOut bool, showCost bool, input io.Reader, piped bool, output, errorOutput io.Writer) error {
 	if be == nil {
 		return errors.New("CLI backend is not configured")
 	}
@@ -3283,8 +3286,11 @@ func runOneShot(be backend.Backend, cfg *config.Config, modelAlias, resumeID, me
 	var streamErr error
 	terminal := false
 	// Cost rollup: price this run's usage events against the embedded catalog;
-	// unknown or free models keep the footer hidden.
-	costs := newCostTracker(cfg, modelAlias)
+	// disabled, unknown, or free models keep the footer hidden.
+	var costs *costTracker
+	if showCost {
+		costs = newCostTracker(cfg, modelAlias)
+	}
 streamLoop:
 	for ev := range events {
 		if jsonOut {

@@ -68,3 +68,26 @@ func TestClientConfigSaveRoundTripAndNormalizesAppearance(t *testing.T) {
 		t.Fatalf("round-trip config = %+v", loaded)
 	}
 }
+
+func TestClientConfigShowCostDefaultsAndRoundTrips(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := LoadClientConfig()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.ShowCost {
+		t.Fatalf("show_cost must default to false (opt-in)")
+	}
+	cfg.ShowCost = true
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, err := LoadClientConfig()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !loaded.ShowCost {
+		t.Fatalf("show_cost round-trip: got false, want true")
+	}
+}

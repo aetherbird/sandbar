@@ -15,6 +15,7 @@ type ClientConfig struct {
 	Theme        string `yaml:"theme"`
 	ColorMode    string `yaml:"color_mode"`
 	FontSize     int    `yaml:"font_size"`
+	ShowCost     bool   `yaml:"show_cost"`
 }
 
 const (
@@ -70,6 +71,7 @@ default_model: ""       # Preferred model alias (e.g. "gemma4")
 theme: "system"         # --theme > SANDBAR_THEME > this preference > system light/dark
 color_mode: "auto"      # auto | always | never (NO_COLOR also disables color in auto mode)
 font_size: 15           # px
+show_cost: false        # true = show session cost in the status bar (offline price catalog)
 `
 		if err := os.WriteFile(path, []byte(template), 0644); err != nil {
 			return nil, fmt.Errorf("write default client config: %w", err)

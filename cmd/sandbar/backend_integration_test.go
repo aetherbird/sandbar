@@ -318,7 +318,7 @@ func TestRunOneShotUsesBackendStream(t *testing.T) {
 		{Type: "done", ThreadID: "remote-thread"},
 	}}
 	var stdout, stderr bytes.Buffer
-	if err := runOneShot(be, nil, "remote/model", "resume-id", "question", "", false, false, strings.NewReader("stdin payload"), true, &stdout, &stderr); err != nil {
+	if err := runOneShot(be, nil, "remote/model", "resume-id", "question", "", false, false, true, strings.NewReader("stdin payload"), true, &stdout, &stderr); err != nil {
 		t.Fatalf("runOneShot: %v", err)
 	}
 	if got := stdout.String(); got != "remote response\n" {
@@ -342,7 +342,7 @@ func TestRunOneShotJSONPreservesCanonicalEvents(t *testing.T) {
 	}
 	be := &fakeCLIBackend{events: want}
 	var output bytes.Buffer
-	if err := runOneShot(be, nil, "model", "", "message", "", false, true, strings.NewReader(""), false, &output, &bytes.Buffer{}); err != nil {
+	if err := runOneShot(be, nil, "model", "", "message", "", false, true, true, strings.NewReader(""), false, &output, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runOneShot: %v", err)
 	}
 	dec := json.NewDecoder(&output)
@@ -381,7 +381,7 @@ func TestBackendThreadMutationsDoNotUseLocalStore(t *testing.T) {
 
 func TestRunOneShotReturnsStreamError(t *testing.T) {
 	be := &fakeCLIBackend{events: []llm.StreamEvent{{Type: "error", Content: "remote failed"}}}
-	err := runOneShot(be, nil, "model", "", "message", "", false, false, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
+	err := runOneShot(be, nil, "model", "", "message", "", false, false, true, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || err.Error() != "remote failed" {
 		t.Fatalf("error = %v, want remote failed", err)
 	}
@@ -391,7 +391,7 @@ func TestStreamsRequireCanonicalDone(t *testing.T) {
 	t.Run("one-shot rejects unexpected EOF", func(t *testing.T) {
 		be := &fakeCLIBackend{events: []llm.StreamEvent{{Type: "token", Content: "partial"}}}
 		var output bytes.Buffer
-		err := runOneShot(be, nil, "model", "", "message", "", false, false, strings.NewReader(""), false, &output, &bytes.Buffer{})
+		err := runOneShot(be, nil, "model", "", "message", "", false, false, true, strings.NewReader(""), false, &output, &bytes.Buffer{})
 		if !errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatalf("error = %v, want io.ErrUnexpectedEOF", err)
 		}
@@ -425,7 +425,7 @@ func TestStreamsTerminateOnTerminalEventWithoutWaitingForClose(t *testing.T) {
 		be := &openStreamCLIBackend{fakeCLIBackend: &fakeCLIBackend{}, stream: events}
 		result := make(chan error, 1)
 		go func() {
-			result <- runOneShot(be, nil, "model", "", "message", "", false, false, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
+			result <- runOneShot(be, nil, "model", "", "message", "", false, false, true, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
 		}()
 		events <- llm.StreamEvent{Type: "done", ThreadID: "thread"}
 		select {
@@ -443,7 +443,7 @@ func TestStreamsTerminateOnTerminalEventWithoutWaitingForClose(t *testing.T) {
 		be := &openStreamCLIBackend{fakeCLIBackend: &fakeCLIBackend{}, stream: events}
 		result := make(chan error, 1)
 		go func() {
-			result <- runOneShot(be, nil, "model", "", "message", "", false, false, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
+			result <- runOneShot(be, nil, "model", "", "message", "", false, false, true, strings.NewReader(""), false, &bytes.Buffer{}, &bytes.Buffer{})
 		}()
 		events <- llm.StreamEvent{Type: "error", Content: "provider failed"}
 		select {

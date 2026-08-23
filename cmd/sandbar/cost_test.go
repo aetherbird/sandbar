@@ -98,7 +98,7 @@ func TestOneShotCostFooter(t *testing.T) {
 
 	var stderr strings.Builder
 	be := &fakeCLIBackend{events: events}
-	if err := runOneShot(be, cfg, "anthropic/claude-opus-4-5", "", "q", "", false, false, strings.NewReader(""), false, &strings.Builder{}, &stderr); err != nil {
+	if err := runOneShot(be, cfg, "anthropic/claude-opus-4-5", "", "q", "", false, false, true, strings.NewReader(""), false, &strings.Builder{}, &stderr); err != nil {
 		t.Fatalf("one-shot: %v", err)
 	}
 	// 1M in * $5/M + 100k out * $25/M = $7.5
@@ -108,7 +108,7 @@ func TestOneShotCostFooter(t *testing.T) {
 
 	unknown := &fakeCLIBackend{events: events}
 	stderr.Reset()
-	if err := runOneShot(unknown, cfg, "anthropic/totally-unknown", "", "q", "", false, false, strings.NewReader(""), false, &strings.Builder{}, &stderr); err != nil {
+	if err := runOneShot(unknown, cfg, "anthropic/totally-unknown", "", "q", "", false, false, true, strings.NewReader(""), false, &strings.Builder{}, &stderr); err != nil {
 		t.Fatalf("one-shot unknown: %v", err)
 	}
 	if strings.Contains(stderr.String(), "cost") {
