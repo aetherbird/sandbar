@@ -653,6 +653,22 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, tea.Sequence(terminalOutput...))
 		}
 
+	// ── paste ───────────────────────────────────────────────────────────────
+	case tea.PasteMsg:
+		// v2 delivers bracketed-paste content as PasteMsg (v1 folded it into
+		// KeyRunes); forward it to the textarea so pasted text is never
+		// silently dropped.
+		if m.searchMode != "" {
+			m.searchQuery += msg.Content
+			m.doReverseSearch()
+			return m, nil
+		}
+		var taCmd tea.Cmd
+		m.ta, taCmd = m.ta.Update(msg)
+		cmds = append(cmds, taCmd)
+		m.syncInputHeight()
+		return m, nil
+
 	// ── keyboard ─────────────────────────────────────────────────────────────
 	case tea.KeyPressMsg:
 		if len(m.approvals) > 0 {
