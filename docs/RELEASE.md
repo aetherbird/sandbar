@@ -81,8 +81,8 @@ Today `module sandbar` and imports read `sandbar/internal/...`. At flip time:
 4. Add the public remote, set the repo-local author identity (above), push.
 5. Tag and push the first release:
    ```bash
-   git tag -a v0.1.0 -m "first public release"
-   git push origin v0.1.0
+   git tag -a v0.1.1 -m "first public release"
+   git push origin v0.1.1
    ```
 
 ## goreleaser first run
@@ -96,7 +96,7 @@ until a public URL exists.
 ```bash
 goreleaser check                          # config validates
 goreleaser release --snapshot --clean     # full local dry run, no network
-GITHUB_TOKEN=<token> goreleaser release --clean   # on the v0.1.0 tag
+GITHUB_TOKEN=<token> goreleaser release --clean   # on the v0.1.1 tag
 ```
 
 Snapshot builds stamp `X.Y.(Z+1)-dev` via `snapshot.version_template`.
@@ -108,7 +108,7 @@ On a clean Linux and macOS box (no repo checkout, minimal PATH):
 ```bash
 SANDBAR_OWNER=<owner> sh -c \
   'curl -fsSL https://raw.githubusercontent.com/<owner>/sandbar/main/install.sh | sh'
-sandbar --version        # prints sandbar v0.1.0
+sandbar --version        # prints sandbar v0.1.1
 sandbar doctor           # passes with only env keys set
 ```
 

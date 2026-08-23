@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/sandbar/main/install.sh | S
 
 The script detects your platform, downloads the release archive, verifies it
 against the published sha256 checksums, and installs to `~/.local/bin`
-(override with `BIN_DIR`; pin a release with `SANDBAR_VERSION=v0.1.0`).
+(override with `BIN_DIR`; pin a release with `SANDBAR_VERSION=v0.1.1`).
 `SANDBAR_OWNER` is a placeholder until the public owner is finalized at
 release — see [docs/RELEASE.md](docs/RELEASE.md).
 
