@@ -7,8 +7,11 @@ tagged and pushed.
 
 ## Current state
 
-- **Tag** `v0.1.1` is pushed. `v0.1.0` is retracted in `go.mod` (it predates
-  the module-path flip and declared `module sandbar`).
+- **Tags: `v0.1.1` (first public release) and `v0.3.0` (current).** The
+  intermediate tags (`v0.1.2`, `v0.2.0`, `v0.2.1`) were deleted on
+  2026-08-23 to keep the public release history minimal; they are
+  `retract`ed in `go.mod` so any Go-proxy-cached copies resolve with a
+  clear "superseded" error instead of installing stale code.
 - **Module** is `github.com/aetherbird/sandbar`; `go install
   github.com/aetherbird/sandbar/cmd/sandbar@latest` installs the binary as
   `sandbar`.

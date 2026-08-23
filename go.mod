@@ -63,4 +63,9 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-retract v0.1.0 // pre-flip tag (module declared 'sandbar'); superseded by v0.1.1
+retract (
+	v0.1.0 // pre-flip tag (module declared 'sandbar')
+	v0.1.2 // superseded: consolidated release history (use v0.1.1 or v0.3.0)
+	v0.2.0 // superseded: consolidated release history (use v0.3.0)
+	v0.2.1 // superseded: consolidated release history (use v0.3.0)
+)

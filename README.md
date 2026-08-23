@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/aetherbird/sandbar/main/install.sh 
 
 The script detects your platform, downloads the release archive, verifies it
 against the published sha256 checksums, and installs to `~/.local/bin`
-(override with `BIN_DIR`; pin a release with `SANDBAR_VERSION=v0.1.1`).
+(override with `BIN_DIR`; pin a release with `SANDBAR_VERSION=v0.3.0`).
 Prebuilt binaries are not published yet — the install script and pinned
 versions will work once a goreleaser release ships (see
 [docs/RELEASE.md](docs/RELEASE.md)). Build from source or `go install` in
