@@ -420,7 +420,7 @@ func TestContextGaugeThresholds(t *testing.T) {
 	}
 	for _, c := range cases {
 		m.ctxUsed, m.ctxMax = c.used, c.max
-		if _, role := m.contextStatus(true); role != c.want {
+		if _, role := m.contextStatus(nil, true); role != c.want {
 			t.Errorf("ctx %d/%d role = %q, want %q", c.used, c.max, role, c.want)
 		}
 	}

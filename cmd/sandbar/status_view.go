@@ -7,6 +7,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/aetherbird/sandbar/internal/cliui"
 )
 
 func (m appModel) turnActivity() (spinner, duration string) {
@@ -21,7 +23,39 @@ func (m appModel) turnActivity() (spinner, duration string) {
 	return spinner, duration
 }
 
-func (m appModel) contextStatus(compact bool) (string, string) {
+// sym picks the plain-ASCII glyph when the style set renders for the ASCII
+// profile (color disabled), so the bar stays 7-bit clean there.
+func sym(s *styleSet, fancy, plain string) string {
+	if s != nil && s.ColorProfile() == cliui.ProfileAscii {
+		return plain
+	}
+	return fancy
+}
+
+// approvalChip renders the approval-mode segment from the active tool
+// config, or "" when the mode is unknown/unconfigured. Yolo is quiet (a
+// single dim glyph) — the bar should whisper when nothing needs you and
+// speak up when approvals will interrupt (legacy statusbar behavior).
+func (m appModel) approvalChip(s *styleSet) string {
+	mode := ""
+	if m.sess != nil && m.sess.cfg != nil {
+		mode = strings.ToLower(strings.TrimSpace(m.sess.cfg.Tools.Approval.Mode))
+	}
+	switch mode {
+	case "always-ask", "ask":
+		return s.Style(cWarn).Render(sym(s, "⚠", "!") + " ask")
+	case "write":
+		return s.Style(cWarn).Render("w")
+	case "yolo":
+		return s.Style(cMuted).Render(sym(s, "≈", "~"))
+	case "":
+		return ""
+	default:
+		return s.Style(cMuted).Render(mode)
+	}
+}
+
+func (m appModel) contextStatus(s *styleSet, compact bool) (string, string) {
 	if m.ctxMax <= 0 {
 		return "ctx --", cMuted
 	}
@@ -37,6 +71,11 @@ func (m appModel) contextStatus(compact bool) (string, string) {
 	if compact {
 		return fmt.Sprintf("ctx %d%%", pi), role
 	}
+	// The ASCII profile drops the block gauge: █/░ are box-drawing glyphs
+	// (legacy renders a plain "ctx NN" there instead).
+	if s != nil && s.ColorProfile() == cliui.ProfileAscii {
+		return fmt.Sprintf("ctx %s/%s %d%%", fmtTok(m.ctxUsed), fmtTok(m.ctxMax), pi), role
+	}
 	filled := int(8 * pct)
 	if filled < 0 {
 		filled = 0
@@ -50,7 +89,9 @@ func (m appModel) contextStatus(compact bool) (string, string) {
 
 // statusLine uses width tiers rather than allowing a fixed full status to wrap.
 // Narrow terminals progressively drop the gauge and timer while retaining the
-// active model and streaming state.
+// active model and streaming state. The rendered line is always exactly the
+// terminal width: ansi.Truncate clips deterministically from the end and the
+// remainder pads, so it can never physically wrap.
 func (m appModel) statusLine() string {
 	width := m.width
 	if width <= 0 {
@@ -66,9 +107,13 @@ func (m appModel) statusLine() string {
 		model = "no model"
 	}
 
-	icon := s.Style(cAccent).Bold(true).Render("⚓")
+	icon := s.Style(cAccent).Bold(true).Render(sym(s, "⚓", "#"))
 	modelText := s.Style(cPurple).Bold(true).Render(model)
-	separator := s.Style(cBorder).Render(" │ ")
+	separator := s.Style(cBorder).Render(" " + sym(s, "│", "|") + " ")
+	chip := m.approvalChip(s)
+	if chip != "" {
+		chip = separator + chip // its own segment, like legacy's
+	}
 	activity := s.Style(cMuted).Render(spinner + " " + duration)
 	// Cost segment appears only when the active model has catalog pricing;
 	// unknown and free models hide it instead of showing a meaningless "$0".
@@ -79,11 +124,11 @@ func (m appModel) statusLine() string {
 	var inner string
 	switch {
 	case width >= 78:
-		ctx, role := m.contextStatus(false)
-		inner = " " + icon + " " + modelText + separator + s.Style(role).Render(ctx) + separator + activity + cost
+		ctx, role := m.contextStatus(s, false)
+		inner = " " + icon + " " + modelText + chip + separator + s.Style(role).Render(ctx) + separator + activity + cost
 	case width >= 52:
-		ctx, role := m.contextStatus(true)
-		inner = " " + icon + " " + modelText + separator + s.Style(role).Render(ctx) + separator + activity + cost
+		ctx, role := m.contextStatus(s, true)
+		inner = " " + icon + " " + modelText + chip + separator + s.Style(role).Render(ctx) + separator + activity + cost
 	case width >= 30:
 		inner = " " + icon + " " + modelText + separator + activity + cost
 	default:

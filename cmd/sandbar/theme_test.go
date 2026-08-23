@@ -159,7 +159,9 @@ func TestMarkdownRendererInvalidatesForThemeAndProfile(t *testing.T) {
 }
 
 func TestResponsiveStatusWidthsWithUnicode(t *testing.T) {
-	s, err := newStyleSet("tokyo-night", config.ColorModeNever, true, nil)
+	// ColorModeAlways keeps the fancy glyphs: this test pins width stability,
+	// not the ASCII-profile swap (covered in status_view_test.go).
+	s, err := newStyleSet("tokyo-night", config.ColorModeAlways, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

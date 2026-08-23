@@ -277,6 +277,24 @@ type appModel struct {
 	pathSel       int
 	pathDismissed bool
 
+	// @-mention fuzzy picker: highlighted row in the cwd-file popup that
+	// appears while the cursor is in a plain "@query" word. mentionDismissed
+	// mirrors pathDismissed: set by Esc, cleared on the next text change.
+	mentionSel       int
+	mentionDismissed bool
+	// mentionIdx caches the cwd file index behind the @-mention picker;
+	// mentionBuilt guards the one-time walk.
+	mentionIdx   []string
+	mentionBuilt bool
+
+	// Editor power state (see editor_power.go): a readline-style kill ring,
+	// yank-pop bookkeeping, and the undo stack of pre-edit snapshots, all
+	// layered over the bubbles textarea.
+	killRing  []string
+	killIdx   int
+	yankState yankSnap
+	undoStack []cursorSnap
+
 	// reverse-i-search (Ctrl+R): typing filters history incrementally.
 	// searchMode is "" when inactive, "reverse" when active.
 	searchMode  string
@@ -663,11 +681,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.doReverseSearch()
 			return m, nil
 		}
+		// Oversized pastes collapse to a bounded head + marker (the full
+		// text lands in the kill ring — see editor_power.go).
+		if m.collapsePaste(msg.Content) {
+			m.mentionSel = 0
+			m.mentionDismissed = false
+			m.draft = ""
+			m.syncInputHeight()
+			return m, nil
+		}
+		pre := cursorSnap{value: m.ta.Value(), row: m.ta.Line(), col: m.ta.Column()}
 		var taCmd tea.Cmd
 		m.ta, taCmd = m.ta.Update(msg)
 		cmds = append(cmds, taCmd)
+		if m.ta.Value() != pre.value {
+			m.pushUndo(pre) // a normal paste is one undoable step
+		}
+		// A paste changes the text: re-arm the popups, same as typing.
+		m.mentionSel = 0
+		m.mentionDismissed = false
+		m.draft = ""
 		m.syncInputHeight()
 		return m, nil
+
+	// ── external editor round-trip result ────────────────────────────────────
+	case editorDoneMsg:
+		return m, m.finishExternalEditor(msg)
 
 	// ── keyboard ─────────────────────────────────────────────────────────────
 	case tea.KeyPressMsg:
@@ -717,10 +756,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Accept the match: exit search mode and fall through so the
 				// main Enter handler submits the textarea's value normally.
 				// Completion popups are suppressed for this keypress — a
-				// recalled entry that happens to contain a path must send,
-				// not complete — and the send path re-arms them.
+				// recalled entry that happens to contain a path or an @-word
+				// must send, not complete — and the send path re-arms them.
 				m.searchMode = ""
 				m.slashDismissed = true
+				m.mentionDismissed = true
 				m.pathDismissed = true
 			case "backspace":
 				if r := []rune(m.searchQuery); len(r) > 0 {
@@ -811,6 +851,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.slashSel = 0
 				return m, nil
 			}
+			if len(m.mentionSuggestions()) > 0 || m.mentionDismissed {
+				m.mentionDismissed = true // suppress until next text change
+				m.mentionSel = 0
+				return m, nil
+			}
 			if len(m.pathSuggestions()) > 0 || m.pathDismissed {
 				m.pathDismissed = true // suppress until next text change
 				return m, nil
@@ -833,6 +878,35 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 
+		case "ctrl+k", "ctrl+u", "ctrl+w", "ctrl+y", "alt+y":
+			// Readline-style kill-ring editing (see editor_power.go). These
+			// keys are intercepted before the textarea, which binds ctrl+k/u/w
+			// to plain deletes that never record into a ring.
+			if m.pickMode != "" {
+				return m, nil // picker overlays consume every key
+			}
+			m.editKey(msg)
+			return m, nil
+
+		case "ctrl+_", "ctrl+/", "ctrl+\x1f":
+			// Emacs undo (all three spellings are the same 0x1f byte). Inert
+			// while a turn streams or a picker owns the keys.
+			if m.streaming || m.pickMode != "" {
+				return m, nil
+			}
+			m.undo()
+			return m, nil
+
+		case "ctrl+g":
+			// External editor round-trip: hand the terminal to $VISUAL/$EDITOR
+			// with the current draft and restore the result on return. Only
+			// when idle — a mid-turn suspend would strand the in-flight
+			// stream, and an open picker must keep owning the keys.
+			if m.streaming || m.pickMode != "" {
+				return m, nil
+			}
+			return m, m.openExternalEditor()
+
 		case "tab":
 			// Complete the highlighted slash command (leaves a trailing space for args).
 			if sugg := m.slashSuggestions(); len(sugg) > 0 {
@@ -841,9 +915,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.slashSel = 0
 				return m, nil
 			}
-			// Complete the highlighted path suggestion.
+			// Accept the highlighted @-mention.
+			if ms := m.mentionSuggestions(); len(ms) > 0 {
+				m.acceptMention(ms)
+				m.mentionSel = 0
+				m.mentionDismissed = true // prevent immediate re-popup
+				return m, nil
+			}
+			// Complete the highlighted path suggestion (longest common prefix
+			// when several candidates match).
 			if psugg := m.pathSuggestions(); len(psugg) > 0 {
-				m.completePath(psugg)
+				m.tabCompletePath(psugg)
 				m.pathSel = 0
 				return m, nil
 			}
@@ -857,6 +939,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if n := len(m.slashSuggestions()); n > 0 {
 				if m.slashSel > 0 {
 					m.slashSel--
+				}
+				return m, nil
+			}
+			if n := len(m.mentionSuggestions()); n > 0 {
+				if m.mentionSel > 0 {
+					m.mentionSel--
 				}
 				return m, nil
 			}
@@ -898,6 +986,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if n := len(m.slashSuggestions()); n > 0 {
 				if m.slashSel < n-1 {
 					m.slashSel++
+				}
+				return m, nil
+			}
+			if n := len(m.mentionSuggestions()); n > 0 {
+				if m.mentionSel < n-1 {
+					m.mentionSel++
 				}
 				return m, nil
 			}
@@ -944,6 +1038,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 				return m, m.slashCmd(cmd)
 			}
+			// @-mention popup open: accept the highlighted match.
+			if ms := m.mentionSuggestions(); len(ms) > 0 {
+				m.acceptMention(ms)
+				m.mentionSel = 0
+				m.mentionDismissed = true // prevent immediate re-popup
+				return m, nil
+			}
 			// Path autocomplete open: complete the highlighted entry.
 			if psugg := m.pathSuggestions(); len(psugg) > 0 {
 				m.completePath(psugg)
@@ -984,6 +1085,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The send consumed the input; re-arm the completion popups that
 			// search-mode acceptance suppressed for this keypress.
 			m.slashDismissed = false
+			m.mentionDismissed = false
 			m.pathDismissed = false
 
 			// Shell escape: "!command" runs directly in the user's shell
@@ -1059,14 +1161,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Don't feed keys to the (hidden) input while a picker menu is open.
 	if m.pickMode == "" {
 		before := m.ta.Value()
+		pre := cursorSnap{value: before, row: m.ta.Line(), col: m.ta.Column()}
 		var taCmd tea.Cmd
 		m.ta, taCmd = m.ta.Update(msg)
 		cmds = append(cmds, taCmd)
 		// Typing/backspace changes the filter → reset the suggestion highlight.
 		if m.ta.Value() != before {
+			// Every direct textarea edit is undoable: snapshot the pre-edit
+			// state (this also breaks the yank-pop chain — alt+y only
+			// rotates immediately after ctrl+y).
+			m.pushUndo(pre)
 			m.slashSel = 0
 			m.pathSel = 0
 			m.pathDismissed = false // re-enable path popup on text change
+			m.mentionSel = 0
+			m.mentionDismissed = false // re-enable mention popup on text change
 			// Clear draft when user types: the saved input is stale.
 			m.draft = ""
 		}
@@ -1101,6 +1210,8 @@ func (m appModel) View() tea.View {
 			popup = prompt + sty(cMuted).Render(m.ta.Value()) + "\n"
 		} else if sugg := m.slashSuggestions(); len(sugg) > 0 {
 			popup = m.slashSuggestView(sugg) + "\n" // autocomplete above input
+		} else if ms := m.mentionSuggestions(); len(ms) > 0 {
+			popup = m.mentionSuggestView(ms) + "\n" // @-mention picker above input
 		} else if psugg := m.pathSuggestions(); len(psugg) > 0 {
 			popup = m.pathSuggestView(psugg) + "\n" // path popup above input
 		}
@@ -1835,14 +1946,38 @@ func (m appModel) pathSuggestView(sugg []string) string {
 	return b.String()
 }
 
-// completePath replaces the current word's filename portion with the selected
-// suggestion. The directory portion (everything up to and including the last
-// "/") is preserved.
+// completePath replaces the current word's filename portion with the
+// selected suggestion (Enter). The directory portion (everything up to and
+// including the last "/") is preserved.
 func (m *appModel) completePath(sugg []string) {
 	sel := m.clampedPathSel(len(sugg))
 	if sel < 0 || sel >= len(sugg) {
 		return
 	}
+	m.fillPathWord(sugg[sel])
+}
+
+// tabCompletePath completes the current path word like bash (Tab): a single
+// candidate replaces the word outright; several candidates fill their
+// longest common prefix, and a second Tab then narrows or selects from the
+// refreshed list. Enter remains the way to pick a specific highlighted row.
+func (m *appModel) tabCompletePath(sugg []string) {
+	chosen := ""
+	if len(sugg) == 1 {
+		chosen = sugg[0]
+	} else if len(sugg) > 1 {
+		chosen = longestCommonPrefix(sugg)
+	}
+	if chosen == "" {
+		return
+	}
+	m.fillPathWord(chosen)
+}
+
+// fillPathWord replaces the filename portion of the word after the last
+// whitespace, preserving the directory portion (everything up to and
+// including the last "/").
+func (m *appModel) fillPathWord(replacement string) {
 	v := m.ta.Value()
 	lastSpace := strings.LastIndexAny(v, " \n")
 	wordStart := lastSpace + 1
@@ -1852,9 +1987,26 @@ func (m *appModel) completePath(sugg []string) {
 		return
 	}
 	dirPart := word[:slashIdx+1] // includes trailing "/"
-	m.ta.SetValue(v[:wordStart] + dirPart + sugg[sel])
+	m.ta.SetValue(v[:wordStart] + dirPart + replacement)
 	m.ta.CursorEnd()
 	m.syncInputHeight()
+}
+
+// longestCommonPrefix finds the shared prefix of all candidates.
+func longestCommonPrefix(in []string) string {
+	if len(in) == 0 {
+		return ""
+	}
+	p := in[0]
+	for _, s := range in[1:] {
+		for !strings.HasPrefix(s, p) {
+			p = p[:len(p)-1]
+			if p == "" {
+				return ""
+			}
+		}
+	}
+	return p
 }
 
 // ── Reverse-i-search ──────────────────────────────────────────────────────────

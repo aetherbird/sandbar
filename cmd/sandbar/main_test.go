@@ -188,6 +188,14 @@ func TestLiveHelpers(t *testing.T) {
 // the embedded textarea is initialized like the real program.
 func TestViewRendersStatusBar(t *testing.T) {
 	m := newModel(&session{modelAlias: "openrouter/some-model"})
+	// Force a colorful style set: under go test stdout is not a TTY, so the
+	// default bootstrap styles resolve to the ASCII profile, which swaps the
+	// anchor glyph (covered by TestStatusLineAsciiFallback).
+	s, err := newStyleSet("system", config.ColorModeAlways, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.styles = s
 	m.width = 100
 	m.ctxUsed, m.ctxMax = 50, 1000
 	out := stripANSI(m.View().Content)
