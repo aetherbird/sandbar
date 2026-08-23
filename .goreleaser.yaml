@@ -52,13 +52,14 @@ snapshot:
 # Release mode: on a vX.Y.Z tag goreleaser publishes a GitHub release with the
 # archives and checksums above; nothing needs enabling here.
 
-# DEFERRED until the public repo exists (both pipes need a real repo URL):
+# DEFERRED until a goreleaser-published release exists (both pipes need a real
+# release URL to point at):
 #
 # brews:
 #   - repository:
-#       owner: <owner>
+#       owner: aetherbird
 #       name: homebrew-tap
-#     homepage: https://github.com/<owner>/sandbar
+#     homepage: https://github.com/aetherbird/sandbar
 #     description: Terminal AI coding-agent harness
 #     license: MIT
 #     install: |
@@ -66,8 +67,8 @@ snapshot:
 #
 # scoop:
 #   - repository:
-#       owner: <owner>
+#       owner: aetherbird
 #       name: scoop-bucket
-#     homepage: https://github.com/<owner>/sandbar
+#     homepage: https://github.com/aetherbird/sandbar
 #     description: Terminal AI coding-agent harness
 #     license: MIT

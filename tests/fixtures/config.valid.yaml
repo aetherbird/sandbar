@@ -4,7 +4,7 @@ database: "./sandbar.db"
 persona:
   name: "Sandbar"
   # Fixture uses the legacy inline form so TestLoadValid keeps covering it;
-  # production configs use system_prompt_file (see src/config.yaml).
+  # production configs use system_prompt_file (see config.yaml.example).
   system_prompt: "You are a fixture persona for config tests."
 
 providers:

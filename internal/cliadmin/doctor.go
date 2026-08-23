@@ -83,9 +83,22 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 	}
 
 	var core *config.Config
+	var zeroConfig bool
 	corePath, err := Path(CoreConfig, options.ConfigPath)
 	if err != nil {
-		add(failCheck("config", "could not resolve core config", map[string]any{"error": err.Error()}))
+		// The REPL boots zero-config from $OPENAI_API_KEY when no config file
+		// exists (cmd/sandbar/main.go loadCoreConfig); doctor mirrors that so
+		// a zero-config machine reports as healthy as it boots.
+		if zero, ok := config.DefaultFromEnv(); ok {
+			core = zero
+			zeroConfig = true
+			add(zeroConfigCheck(deps.Stat))
+		} else {
+			add(failCheck("config", "could not resolve core config", map[string]any{
+				"error": err.Error(),
+				"hint":  "set $OPENAI_API_KEY for a zero-config boot with OpenAI defaults",
+			}))
+		}
 	} else {
 		loaded, loadErr := config.Load(corePath)
 		if loadErr != nil {
@@ -124,7 +137,7 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		if strings.TrimSpace(options.Workspace) != "" {
 			workspace = options.Workspace
 		}
-		add(checkWorkspace(workspace, deps.Stat))
+		add(checkWorkspace(workspace, zeroConfig, deps.Stat))
 		add(checkDatabase(core.Database, deps.Stat))
 		modelCheck, authCheck := checkModel(core, chooseModel(options.Model, client))
 		add(modelCheck)
@@ -216,13 +229,19 @@ func chooseModel(explicit string, client *config.ClientConfig) string {
 	return ""
 }
 
-func checkWorkspace(configured string, stat func(string) (os.FileInfo, error)) DoctorCheck {
+func checkWorkspace(configured string, zeroConfig bool, stat func(string) (os.FileInfo, error)) DoctorCheck {
 	path, err := filepath.Abs(configured)
 	if err != nil {
 		return failCheck("workspace", "workspace path could not be resolved", map[string]any{"error": err.Error()})
 	}
 	info, err := stat(path)
 	if err != nil {
+		// The zero-config default ./workspace never exists on a fresh
+		// machine — the REPL boots without it and the harness creates it on
+		// the first file write. That is expected, not a failure.
+		if zeroConfig && configured == "./workspace" {
+			return warnCheck("workspace", "default workspace ./workspace does not exist yet — it is created on the first file write", map[string]any{"path": path})
+		}
 		return failCheck("workspace", "workspace is unavailable", map[string]any{"path": path, "error": err.Error()})
 	}
 	if !info.IsDir() {
@@ -508,6 +527,37 @@ func checkCatalog() DoctorCheck {
 		return warnCheck("catalog", "embedded pricing catalog is empty (cost rollups inactive)", details)
 	}
 	return passCheck("catalog", "embedded pricing catalog loaded (cost rollups active)", details)
+}
+
+// zeroConfigCheck reports the zero-config fallback that keeps a machine with
+// only $OPENAI_API_KEY set booting. It mirrors the CLI boot path: write the
+// commented template to the default config location, then report whether the
+// write landed (WriteDefaultConfigTemplate fails silently when no
+// config.yaml.example is findable, e.g. for a bare go-installed binary).
+func zeroConfigCheck(stat func(string) (os.FileInfo, error)) DoctorCheck {
+	templatePath := zeroConfigTemplatePath()
+	config.WriteDefaultConfigTemplate()
+	summary := "no config file found — using zero-config defaults from $OPENAI_API_KEY"
+	if templatePath == "" {
+		summary += " (template path unavailable — template not written)"
+	} else if _, err := stat(templatePath); err == nil {
+		summary += " (template written to " + templatePath + ")"
+	} else {
+		summary += " (no config.yaml.example found — template not written)"
+	}
+	return passCheck("zero_config", summary, map[string]any{"template_path": templatePath})
+}
+
+// zeroConfigTemplatePath mirrors config.WriteDefaultConfigTemplate's
+// destination so the doctor line can name the exact file it wrote.
+func zeroConfigTemplatePath() string {
+	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
+		return filepath.Join(base, "sandbar", "config.yaml")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".config", "sandbar", "config.yaml")
+	}
+	return ""
 }
 
 func warnCheck(name, summary string, details map[string]any) DoctorCheck {

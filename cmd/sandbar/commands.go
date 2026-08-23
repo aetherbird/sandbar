@@ -46,7 +46,7 @@ func init() {
 		{name: "/theme", desc: "switch CLI theme (menu or id)", run: runThemeCommand},
 		{name: "/sessions", desc: "list & resume past sessions", run: func(m *appModel, _ slashInvocation) tea.Cmd { return m.openSessionPicker() }},
 		{name: "/resume", desc: "resume a session by id or unique prefix", run: runResumeCommand},
-	{name: "/new", desc: "start a fresh thread", run: runNewCommand},
+		{name: "/new", desc: "start a fresh thread", run: runNewCommand},
 		{name: "/delete", desc: "delete the current thread (two-step: /delete confirm)", run: runDeleteCommand},
 		{name: "/title", desc: "set the current session's title", run: func(m *appModel, in slashInvocation) tea.Cmd { return m.setTitle(in.tail) }},
 		{name: "/fork", aliases: []string{"/branch"}, desc: "branch the current session", requirement: slashLocalStore, run: func(m *appModel, _ slashInvocation) tea.Cmd { return m.forkSession() }},

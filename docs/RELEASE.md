@@ -1,130 +1,90 @@
 # Release Guide
 
-How sandbar gets from this private repo to a public GitHub release. The
-module path is `github.com/aetherbird/sandbar` (flipped at the first public push,
-2026-08-23 — see "Module-path flip" below; the procedure is kept for the record)
-the first public push. Nothing in `.goreleaser.yaml`, `Makefile`, or
-`install.sh` hardcodes the public URL or embeds the module path — the version
-stamp uses the module-path-independent `main.version` symbol, and every
-public-URL reference in `install.sh` is parameterized and gets its real
-value at release time.
+How Sandbar releases work today. The module is `github.com/aetherbird/sandbar`
+(the repo is public under `github.com/aetherbird/sandbar`), the repo uses the
+root layout (`cmd/sandbar`, `internal/`, `migrations/`), and `v0.1.1` is
+tagged and pushed.
 
-Condensed from the legacy internal release plan, adapted to this repo.
+## Current state
 
-## Pending owner decisions
+- **Tag** `v0.1.1` is pushed. `v0.1.0` is retracted in `go.mod` (it predates
+  the module-path flip and declared `module sandbar`).
+- **Module** is `github.com/aetherbird/sandbar`; `go install
+  github.com/aetherbird/sandbar/cmd/sandbar@latest` installs the binary as
+  `sandbar`.
+- **No goreleaser-published release exists yet**, so there are no prebuilt
+  binaries: `install.sh` and `SANDBAR_VERSION=...` pinning will work once a
+  release is cut. Until then, users build from source or use `go install`.
 
-These block the first public release; everything else can be prepared:
+## Cutting a release
 
-- [ ] **Public repo name / owner** — single personal GitHub account,
-      `github.com/<owner>/sandbar` (org only if a second maintainer appears).
-      Decide before the flip; the name is baked into the module path.
-- [ ] **Commit author identity for the public repo** — the current private
-      identity must NOT be used. Before pushing anything public:
-      ```bash
-      git config user.name  "<public name>"
-      git config user.email "<public email>"   # repo-local, not --global
-      ```
-      Note: earlier commits in the history keep their original author
-      identity. If that must not ship publicly, the flip commit needs to
-      start a fresh history instead (`git checkout --orphan`), which loses
-      provenance — owner's call.
-- [ ] **Default `SANDBAR_OWNER` in `install.sh`** — replace the `OWNER`
-      placeholder and update the README one-liner URL.
-
-## Pre-push gates (every time, before any public push)
+From the repo root:
 
 ```bash
-cd src
-go vet ./...
-go test -race -count=1 -skip TestFullTuiPipeline ./...
-go build ./...                      # native
-GOOS=windows GOARCH=amd64 go build ./...   # cross-compile spot check
-make build-cli && ./sandbar version # stamped binary boots
+goreleaser release --snapshot --clean    # local full dry run, no network
+goreleaser check                         # config validates
 ```
 
-Secrets — CI already runs gitleaks (`.github/workflows/ci.yml`); additionally:
+On the release tag (tag first, then publish):
 
 ```bash
-gitleaks detect --source . --no-banner    # if installed locally
-grep -rnE '([0-9]{1,3}\.){3}[0-9]{1,3}' --exclude-dir=.git --exclude='*_test.go' . \
-  | grep -vE '127\.0\.0\.1|0\.0\.0\.0|169\.254'   # LAN IPs must not appear
-git log --all --oneline | wc -l           # know what history you're pushing
+git tag -a vX.Y.Z -m "release vX.Y.Z"
+git push origin vX.Y.Z
+GITHUB_TOKEN=<token> goreleaser release --clean
 ```
 
-No literal API keys, tokens, or internal hostnames anywhere in the tree
-(gitleaks catches key shapes; the grep catches LAN references gitleaks
-can't know about).
+goreleaser builds `./cmd/sandbar` as `sandbar` (CGO off, stripped,
+version-stamped with `-X main.version={{ .Version }}`) for
+linux/darwin/windows/freebsd × amd64/arm64 and publishes the archives plus a
+checksums file on the GitHub release. Snapshot builds stamp
+`X.Y.(Z+1)-dev` via `snapshot.version_template`.
 
-## Module-path flip
+## install.sh ↔ goreleaser coupling invariants
 
-Today `module sandbar` and imports read `sandbar/internal/...`. At flip time:
+`install.sh` derives asset URLs from goreleaser's output names. If you change
+one, change the other in the same commit — the installer verifies checksums
+and dies loudly on a mismatch, so a drift breaks installs on release day.
 
-1. Pick the owner/repo (decision above).
-2. Decide the public layout. `go.mod` lives in `src/`, so for
-   `go install` to work the module path must match the repo tree: either
-   move `go.mod` to the repo root (module `github.com/<owner>/sandbar`,
-   packages keep their `internal/...` paths) or keep `src/` and use
-   `github.com/<owner>/sandbar/src` as the module path. Renaming
-   `cmd/cli` → `cmd/sandbar` at the same time makes `go install` produce
-   a binary named `sandbar` instead of `cli`. The steps below assume the
-   root layout.
-3. Rewrite module and imports:
-   ```bash
-   cd src
-   go mod edit -module github.com/<owner>/sandbar
-   grep -rl '"sandbar/' --include='*.go' . | xargs sed -i 's#"sandbar/#"github.com/<owner>/sandbar/#'
-   go build ./... && go test -race -count=1 -skip TestFullTuiPipeline ./...
-   ```
-   The version stamp needs no change: Makefile and .goreleaser.yaml both
-   stamp `main.version`, the linker symbol for package main, which is
-   module-path-independent.
-4. Add the public remote, set the repo-local author identity (above), push.
-5. Tag and push the first release:
-   ```bash
-   git tag -a v0.1.1 -m "first public release"
-   git push origin v0.1.1
-   ```
+The two names, exactly as they appear in both files:
 
-## goreleaser first run
+| Artifact | `.goreleaser.yaml` | `install.sh` |
+|---|---|---|
+| Checksums file | `checksum.name_template: sandbar_checksums.txt` (versionless on purpose, so `releases/latest/download` redirects work) | `checksums_name="sandbar_checksums.txt"` |
+| Archive | `archives[].name: sandbar_{{ .Version }}_{{ .Os }}_{{ .Arch }}` (goreleaser strips the leading `v` from the tag) | `archive_for()` prints `sandbar_<ver>_<os>_<arch>.tar.gz` with the `v` stripped from the requested version |
 
-`src/.goreleaser.yaml` builds `cmd/cli` as `sandbar` — CGO off, stripped,
-version-stamped — for linux/darwin/windows/freebsd × amd64/arm64, archives as
-`sandbar_<version>_<os>_<arch>.tar.gz` (zip on windows), plus
-`sandbar_checksums.txt` (sha256). Brew/scoop pipes are deferred as comments
-until a public URL exists.
+Windows archives are `.zip` (`format_overrides`); all other platforms are
+`.tar.gz`. Both files document the dependency in a comment; keep those
+comments in sync too.
 
-```bash
-goreleaser check                          # config validates
-goreleaser release --snapshot --clean     # full local dry run, no network
-GITHUB_TOKEN=<token> goreleaser release --clean   # on the v0.1.1 tag
-```
+## Pre-release checklist
 
-Snapshot builds stamp `X.Y.(Z+1)-dev` via `snapshot.version_template`.
+- [ ] `go test -race -count=1 -skip TestFullTuiPipeline ./...` green (the
+      skipped test dials a live API when `OPENROUTER_API_KEY` is set)
+- [ ] `gofmt -l .` empty (CI enforces this) and `go vet ./...` green
+- [ ] gitleaks job green in CI; no secrets or internal hostnames in the tree
+- [ ] `cmd/sandbar/version.go` current (docstring, fallback logic); the
+      `-X main.version` stamp path remains first priority
+- [ ] `make build && ./sandbar version` prints the stamped version
+- [ ] `README.md` install section matches the release being cut
+      (`SANDBAR_VERSION=vX.Y.Z` examples)
 
-## install.sh smoke test
+## Post-release checklist
 
-On a clean Linux and macOS box (no repo checkout, minimal PATH):
+- [ ] `sandbar doctor` passes on a zero-config machine (only
+      `OPENAI_API_KEY` set, no config file) — the `zero_config` check must be
+      present and the report healthy
+- [ ] `install.sh` smoke-tested on a clean Linux and macOS box (no repo
+      checkout): `curl -fsSL
+      https://raw.githubusercontent.com/aetherbird/sandbar/main/install.sh |
+      bash`, then `sandbar version`; a tampered `SANDBAR_RELEASES_URL` must
+      fail the checksum gate, and a `BIN_DIR` off `PATH` must print the
+      `export PATH=...` fix line
+- [ ] `go install github.com/aetherbird/sandbar/cmd/sandbar@vX.Y.Z` works
+      from the module proxy and `sandbar version` reports `vX.Y.Z` (build
+      info fallback in `cmd/sandbar/version.go`)
 
-```bash
-SANDBAR_OWNER=<owner> sh -c \
-  'curl -fsSL https://raw.githubusercontent.com/<owner>/sandbar/main/install.sh | sh'
-sandbar --version        # prints sandbar v0.1.1
-sandbar doctor           # passes with only env keys set
-```
+## Deferred
 
-Check that the fetched checksums asset (`sandbar_checksums.txt`) matches
-`checksum.name_template` in `src/.goreleaser.yaml`, that a tampered
-`SANDBAR_RELEASES_URL` fails the checksum gate, and that a `BIN_DIR` off PATH
-prints the exact `export PATH=...` fix line.
-
-## First-release checklist
-
-- [ ] Owner decisions resolved (repo name, public identity, default owner)
-- [ ] Module flip commit landed; `go install github.com/<owner>/sandbar/cmd/sandbar@latest` works
-- [ ] Pre-push gates green (vet, race suite, cross-compile, gitleaks, greps)
-- [ ] Tag `v0.1.0` pushed; goreleaser published all targets + checksums
-- [ ] `install.sh` smoke-tested on clean Linux and macOS
-- [ ] `sandbar doctor` passes with only env keys set (zero-config claim)
-- [ ] README install section: placeholder owner/URLs replaced
-- [ ] Release notes credit the pi / opencode / Claude Code lineages
-- [ ] Post-release (deferred): Homebrew tap + scoop bucket via goreleaser pipes
+Homebrew tap and scoop bucket via goreleaser pipes once a first
+goreleaser-published release exists (the commented `brews`/`scoop` blocks in
+`.goreleaser.yaml` are ready to fill in with the aetherbird repo URLs).

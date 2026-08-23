@@ -11,3 +11,7 @@ dist/
 certs/
 .tmp-build/
 bin/
+*.swp
+*~
+*.test
+.env

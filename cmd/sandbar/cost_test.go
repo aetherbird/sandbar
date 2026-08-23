@@ -11,9 +11,9 @@ import (
 func costTestConfig(provider string) *config.Config {
 	return &config.Config{
 		Providers: []config.ProviderConfig{{
-			Name:   provider,
+			Name:    provider,
 			BaseURL: "https://example.test/v1",
-			APIKey: "k",
+			APIKey:  "k",
 			Models: map[string]config.ModelConfig{
 				"claude-opus-4-5": {SupportsTools: boolPtrTrue()},
 				"totally-unknown": {SupportsTools: boolPtrTrue()},

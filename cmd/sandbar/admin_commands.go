@@ -261,7 +261,7 @@ func runDoctorCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		Workspace:  *workspace,
 		Theme:      effectiveTheme,
 		ColorMode:  effectiveColor,
-		Version:    version,
+		Version:    resolvedVersion(),
 	})
 	if *jsonOutput {
 		data, err := report.JSON()
@@ -292,7 +292,7 @@ func runVersionCommand(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
-	fmt.Fprintln(stdout, "sandbar", version)
+	fmt.Fprintln(stdout, "sandbar", resolvedVersion())
 	return 0
 }
 

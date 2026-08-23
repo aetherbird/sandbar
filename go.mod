@@ -67,3 +67,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+retract v0.1.0 // pre-flip tag (module declared 'sandbar'); superseded by v0.1.1

@@ -16,8 +16,8 @@ const (
 
 // FileTools provides jailed file operations.
 type FileTools struct {
-	workspace  string
-	subagents  SubagentStore // optional: resolves agent:// subagent transcripts
+	workspace string
+	subagents SubagentStore // optional: resolves agent:// subagent transcripts
 }
 
 // NewFileTools creates file tools jailed to workspace.

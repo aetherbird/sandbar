@@ -232,8 +232,8 @@ func TestDoctorReportCarriesVersion(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode doctor report: %v", err)
 	}
-	if report.Version != version {
-		t.Fatalf("doctor report version = %q, want %q", report.Version, version)
+	if report.Version != resolvedVersion() {
+		t.Fatalf("doctor report version = %q, want %q", report.Version, resolvedVersion())
 	}
 }
 

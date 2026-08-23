@@ -5,16 +5,16 @@ Thanks for taking the time.
 ## Build and test
 
 ```bash
-cd src
 make fmt          # go fmt ./...
-make test         # go test -race -count=1 ./...
+make test         # go test -race -count=1 -skip TestFullTuiPipeline ./...
 make build        # CGO_ENABLED=0 static build
 go vet ./...
 ```
 
-Go 1.25+ is required. CI runs vet, the race-enabled test suite, a
-cross-compile matrix (linux/darwin/windows/freebsd × amd64/arm64), and a
-secret scan on every push and pull request.
+Go 1.25+ is required. CI runs vet, a gofmt check (`gofmt -l .` must be
+empty), the race-enabled test suite, a cross-compile matrix
+(linux/darwin/windows/freebsd × amd64/arm64), and a secret scan on every
+push and pull request.
 
 ## Pull requests
 

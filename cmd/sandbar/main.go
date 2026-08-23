@@ -2874,7 +2874,7 @@ func main() {
 	flag.CommandLine.Usage = func() { writeRootUsage(flag.CommandLine.Output(), flag.CommandLine) }
 	flag.Parse()
 	if *versionFlag {
-		fmt.Println("sandbar", version)
+		fmt.Println("sandbar", resolvedVersion())
 		return
 	}
 	if *listThemesFlag {

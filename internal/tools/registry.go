@@ -69,10 +69,10 @@ func NewRegistry(workspace, braveAPIKey, openrouterAPIKey string, blockedCommand
 	r.shell = se
 
 	r.Register(Tool{
-		Name:        "file_read",
-		Description: "Read a file and return its full-content SHA-256; each line is prefixed with an 8-hex content hash usable as a file_patch anchor. URL-like paths resolve before file reads: pr://<n> and issue://<n> (GitHub via the user's gh CLI, owner/repo-qualified forms accepted) and agent://<task-id> (a persisted subagent transcript)",
+		Name:         "file_read",
+		Description:  "Read a file and return its full-content SHA-256; each line is prefixed with an 8-hex content hash usable as a file_patch anchor. URL-like paths resolve before file reads: pr://<n> and issue://<n> (GitHub via the user's gh CLI, owner/repo-qualified forms accepted) and agent://<task-id> (a persisted subagent transcript)",
 		ParallelSafe: true,
-		Metadata:    fileToolMetadata(TierRead, "read"),
+		Metadata:     fileToolMetadata(TierRead, "read"),
 		Schema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

@@ -100,55 +100,55 @@ could be added without touching the REPL; none ship today.
 
 ```
 sandbar/
-├── 
-│   ├── cmd/sandbar/             # Terminal UI (the only binary)
-│   │   └── main.go
-│   ├── internal/
-│   │   ├── agent/           # Core reasoning loop (ordered safe concurrency)
-│   │   │   └── agent.go
-│   │   ├── backend/         # Backend seam; LocalBackend implementation
-│   │   │   └── backend.go
-│   │   ├── llm/             # OpenAI-compatible client, <think> parser,
-│   │   │   │                #   stream events, token accounting
-│   │   │   ├── client.go
-│   │   │   ├── models.go
-│   │   │   ├── stream.go
-│   │   │   └── tokens.go
-│   │   ├── tools/           # Tool implementations + approval policy
-│   │   │   ├── registry.go
-│   │   │   ├── approval.go
-│   │   │   ├── file.go / file_mutation.go / patch.go
-│   │   │   ├── shell.go / jobs.go / ssh.go
-│   │   │   ├── git.go / gitdispatch.go
-│   │   │   ├── search.go / websearch.go / webfetch.go
-│   │   │   ├── delegate.go / todo.go
-│   │   │   ├── imagegen.go / vision.go
-│   │   │   └── sysproc_unix.go / sysproc_windows.go  # platform shims
-│   │   ├── memory/          # Chat history, threads, FTS5 search (WAL)
-│   │   │   ├── store.go
-│   │   │   ├── thread.go
-│   │   │   ├── search.go
-│   │   │   ├── compression.go
-│   │   │   └── plan.go
-│   │   ├── persona/         # System prompts, skills discovery
-│   │   │   └── persona.go
-│   │   ├── config/          # YAML loader, path resolution, zero-config boot
-│   │   │   ├── config.go
-│   │   │   ├── resolve.go
-│   │   │   ├── zerocfg.go
-│   │   │   └── client.go
-│   │   ├── cliadmin/        # `sandbar admin` subcommands (doctor, config…)
-│   │   ├── cliui/           # Shared CLI rendering (wrap, markdown)
-│   │   └── ui/theme/        # Theme palettes
-│   ├── migrations/          # SQLite schema (embedded)
-│   ├── config.yaml.example  # Commented configuration template
-│   ├── system-prompt.md     # Default persona prompt
-│   ├── go.mod / go.sum
-│   └── Makefile
-├── tests/fixtures/          # Integration test fixtures
-├── docs/                    # This document
+├── cmd/sandbar/                 # Terminal UI (the only binary)
+│   ├── main.go
+│   └── commands.go              # slash-command registry + dispatch
+├── internal/
+│   ├── agent/           # Core reasoning loop (ordered safe concurrency)
+│   │   └── agent.go
+│   ├── backend/         # Backend seam; LocalBackend implementation
+│   │   └── backend.go
+│   ├── llm/             # OpenAI-compatible client, <think> parser,
+│   │   │                #   stream events, token accounting
+│   │   ├── client.go
+│   │   ├── models.go
+│   │   ├── stream.go
+│   │   └── tokens.go
+│   ├── tools/           # Tool implementations + approval policy
+│   │   ├── registry.go
+│   │   ├── approval.go
+│   │   ├── file.go / file_mutation.go / patch.go
+│   │   ├── shell.go / jobs.go / ssh.go
+│   │   ├── git.go / gitdispatch.go
+│   │   ├── search.go / websearch.go / webfetch.go
+│   │   ├── delegate.go / todo.go
+│   │   ├── imagegen.go / vision.go
+│   │   └── sysproc_unix.go / sysproc_windows.go  # platform shims
+│   ├── memory/          # Chat history, threads, FTS5 search (WAL)
+│   │   ├── store.go
+│   │   ├── thread.go
+│   │   ├── search.go
+│   │   ├── compression.go
+│   │   └── plan.go
+│   ├── persona/         # System prompts, skills discovery
+│   │   └── persona.go
+│   ├── config/          # YAML loader, path resolution, zero-config boot
+│   │   ├── config.go
+│   │   ├── resolve.go
+│   │   ├── zerocfg.go
+│   │   └── client.go
+│   ├── cliadmin/        # `sandbar admin` subcommands (doctor, config…)
+│   ├── cliui/           # Shared CLI rendering (wrap, markdown)
+│   └── ui/theme/        # Theme palettes
+├── migrations/          # SQLite schema (embedded)
+├── tests/fixtures/      # Integration test fixtures
+├── docs/                # This document
 ├── README.md
-└── LICENSE
+├── LICENSE
+├── config.yaml.example  # Commented configuration template
+├── system-prompt.md     # Default persona prompt
+├── go.mod / go.sum
+└── Makefile
 ```
 
 ---
@@ -641,7 +641,7 @@ Sandbar is a single static binary. There is no server component, no
 service to install, and no deployment topology: run the binary on your
 machine, point it at providers, work.
 
-- Build: `cd src && make build` (CGO_ENABLED=0, stripped).
+- Build: `make build` from the repo root (CGO_ENABLED=0, stripped).
 - Supported platforms via platform shims (`sysproc_unix.go` /
   `sysproc_windows.go`): Linux, macOS, Windows, FreeBSD — each on amd64 and
   arm64. The pure-Go SQLite driver is what keeps the full cross-compile

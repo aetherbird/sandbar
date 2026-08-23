@@ -157,7 +157,7 @@ func TestResponseAccumulatorSurvivesValueCopiesAndGC(t *testing.T) {
 }
 
 // TestLiveHelpers covers the small formatting helpers that ship in the live
-// cmd/cli TUI status bar / footer.
+// cmd/sandbar TUI status bar / footer.
 func TestLiveHelpers(t *testing.T) {
 	if got := shortModel("deepseek/deepseek-v4-flash"); got != "deepseek-v4-flash" {
 		t.Errorf("shortModel = %q", got)

@@ -39,18 +39,18 @@ tools:
     blocked_commands:
       - "rm -rf /"
       - "chmod 777"
+    jobs:                    # supervised background jobs (shell_exec &)
+      max_jobs: 128
+      max_running: 16
+      output_bytes: 65536
+      retention: "30m"
+      termination_grace: "750ms"
   ssh:
     # Remote shell_exec (host argument): the harness owns the ssh transport and
     # quoting; the model passes a plain command. Any host works — none is special.
     connect_timeout: 5s
     batch_mode: true       # no interactive ssh prompts inside agent turns
     allowed_hosts: []      # empty = any host from ~/.ssh/config; else exact allowlist
-    jobs:
-      max_jobs: 128
-      max_running: 16
-      output_bytes: 65536
-      retention: "30m"
-      termination_grace: "750ms"
   web_search:
     engine: "brave"
     brave_api_key: "${BRAVE_API_KEY}"
@@ -75,11 +75,16 @@ compression:
   enabled: true
   threshold: 0.80
   target_ratio: 0.20
+  post_compression_ratio: 0.50   # desired provider-message context after mid-loop compression
+  recent_tail_tokens: 0          # recent-context tail to keep; 0 = derive from context
   min_summary_tokens: 1000
   max_summary_tokens: 12000
+  timeout_seconds: 120           # summarizer timeout; 0 = default 120s
   model: ""    # empty = use current model; set to a fast model alias for compression summaries
 
 subagent:
   model: ""    # empty = default sub-agent model; set to a fast model alias
   # Cap on delegated sub-agent turns; 0 disables the cap (unlimited).
   max_turns: 30
+  # Tools sub-agents can use (default: all read-only tools + shell).
+  tools: ["file_read", "search_files", "web_search", "web_fetch", "shell_exec"]

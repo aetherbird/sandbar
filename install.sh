@@ -10,7 +10,6 @@
 # Environment:
 #   SANDBAR_OWNER        GitHub owner of the sandbar repository.
 #                        Default "aetherbird".
-#                        wired in at release time.
 #   SANDBAR_VERSION      Version to install: "latest" (default) or a tag like
 #                        "v0.1.0" / "0.1.0".
 #   BIN_DIR              Install directory (default: $HOME/.local/bin).
@@ -29,7 +28,7 @@ owner="${SANDBAR_OWNER:-aetherbird}"
 version_request="${SANDBAR_VERSION:-latest}"
 bin_dir="${BIN_DIR:-$HOME/.local/bin}"
 releases_url="${SANDBAR_RELEASES_URL:-https://github.com/${owner}/sandbar/releases}"
-checksums_name="sandbar_checksums.txt" # must match checksum.name_template in src/.goreleaser.yaml
+checksums_name="sandbar_checksums.txt" # must match checksum.name_template in .goreleaser.yaml
 
 err() { printf 'install.sh: %s\n' "$*" >&2; }
 die() { err "$*"; exit 1; }
@@ -39,8 +38,8 @@ usage() {
 Usage: install.sh [--dry-run]
 
 Environment:
-  SANDBAR_OWNER        GitHub owner of the sandbar repository (default:
-                       "OWNER" placeholder, wired to the real owner at release)
+  SANDBAR_OWNER        GitHub owner of the sandbar repository
+                       (default: "aetherbird")
   SANDBAR_VERSION      Version to install: "latest" (default) or "v0.1.0"
   BIN_DIR              Install directory (default: $HOME/.local/bin)
   SANDBAR_RELEASES_URL Base ".../releases" URL (default:

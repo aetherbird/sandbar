@@ -82,7 +82,7 @@ func TestMutationPathLockCoordinatesProcesses(t *testing.T) {
 }
 
 func TestFileReadSuccess(t *testing.T) {
-	ft := NewFileTools("../../tests/fixtures/workspace")
+	ft := NewFileTools("../../tests/fixtures/_workspace")
 	result, err := ft.FileRead(context.Background(), map[string]interface{}{
 		"path": "main.go",
 	})
@@ -120,7 +120,7 @@ func TestFileWriteCreationHonorsProcessUmask(t *testing.T) {
 }
 
 func TestFileReadTraversalRejected(t *testing.T) {
-	ft := NewFileTools("../../tests/fixtures/workspace")
+	ft := NewFileTools("../../tests/fixtures/_workspace")
 	_, err := ft.FileRead(context.Background(), map[string]interface{}{
 		"path": "../config.valid.yaml",
 	})
@@ -130,7 +130,7 @@ func TestFileReadTraversalRejected(t *testing.T) {
 }
 
 func TestFileReadAbsoluteAllowed(t *testing.T) {
-	ft := NewFileTools("../../tests/fixtures/workspace")
+	ft := NewFileTools("../../tests/fixtures/_workspace")
 	_, err := ft.FileRead(context.Background(), map[string]interface{}{
 		"path": "/etc/passwd",
 	})

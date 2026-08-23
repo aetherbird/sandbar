@@ -147,6 +147,97 @@ func TestDoctorSkillsPromptsCheck(t *testing.T) {
 	}
 }
 
+// TestDoctorZeroConfigFallback: with no config file anywhere and
+// $OPENAI_API_KEY set, doctor mirrors the REPL's zero-config boot — a
+// passing zero_config check replaces the failing config check, and the
+// commented template lands at the default config path. Without the key, the
+// config check keeps today's failure, now with a hint naming $OPENAI_API_KEY.
+func TestDoctorZeroConfigFallback(t *testing.T) {
+	newDoctor := func() DoctorReport {
+		return RunDoctor(context.Background(), DoctorOptions{
+			LookupPath: func(name string) (string, error) { return "/test/bin/" + name, nil },
+			Getenv:     func(string) string { return "" },
+			IsTerminal: func(uintptr) bool { return true },
+		})
+	}
+
+	t.Run("env key set boots zero-config", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+		t.Setenv("HOME", tmp)
+		t.Setenv("SANDBAR_CONFIG", "")
+		t.Setenv("OPENAI_API_KEY", "sk-zero-config-test")
+		t.Setenv("OPENAI_BASE_URL", "")
+		t.Setenv("OPENAI_MODEL", "")
+
+		// WriteDefaultConfigTemplate copies config.yaml.example from the
+		// working directory (or next to the binary); provide one so the test
+		// can assert the template actually landed.
+		example := "workspace: ./workspace\n# zero-config test template\n"
+		if err := os.WriteFile(filepath.Join(tmp, "config.yaml.example"), []byte(example), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Fresh zero-config machine: the default ./workspace does not exist
+		// yet. Doctor must warn (not fail) — the REPL boots without it and
+		// the harness creates it on the first file write.
+		t.Chdir(tmp)
+
+		report := newDoctor()
+		if !report.Healthy {
+			t.Fatalf("zero-config doctor unexpectedly unhealthy:\n%s", report.Human())
+		}
+		check := findCheck(report, "zero_config")
+		if check == nil || check.Status != CheckPass {
+			t.Fatalf("zero_config check = %+v, want pass", check)
+		}
+		if !strings.Contains(check.Summary, "template written to") {
+			t.Errorf("zero_config summary missing template line: %q", check.Summary)
+		}
+		if findCheck(report, "config") != nil {
+			t.Fatal("config check must be absent in zero-config mode")
+		}
+		wsCheck := findCheck(report, "workspace")
+		if wsCheck == nil || wsCheck.Status != CheckWarn {
+			t.Fatalf("missing default workspace check = %+v, want warn", wsCheck)
+		}
+		template := filepath.Join(tmp, "config", "sandbar", "config.yaml")
+		data, err := os.ReadFile(template)
+		if err != nil {
+			t.Fatalf("template not written: %v", err)
+		}
+		if string(data) != example {
+			t.Errorf("template content = %q, want %q", data, example)
+		}
+	})
+
+	t.Run("no env key keeps today's failure", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+		t.Setenv("HOME", tmp)
+		t.Setenv("SANDBAR_CONFIG", "")
+		t.Setenv("OPENAI_API_KEY", "")
+		t.Setenv("OPENAI_BASE_URL", "")
+		t.Setenv("OPENAI_MODEL", "")
+
+		report := newDoctor()
+		if report.Healthy {
+			t.Fatalf("no-key doctor should be unhealthy:\n%s", report.Human())
+		}
+		check := findCheck(report, "config")
+		if check == nil || check.Status != CheckFail {
+			t.Fatalf("config check = %+v, want fail", check)
+		}
+		if hint, _ := check.Details["hint"].(string); !strings.Contains(hint, "$OPENAI_API_KEY") {
+			t.Errorf("config check hint %q missing $OPENAI_API_KEY", hint)
+		}
+		if findCheck(report, "zero_config") != nil {
+			t.Fatal("zero_config check must be absent when no env key is set")
+		}
+	})
+}
+
 // TestDoctorCatalogCheck: the embedded snapshot loads, so cost rollups are
 // reported active.
 func TestDoctorCatalogCheck(t *testing.T) {
