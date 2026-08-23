@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func summaryStringPtr(value string) *string { return &value }

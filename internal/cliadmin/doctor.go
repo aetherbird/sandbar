@@ -14,10 +14,10 @@ import (
 
 	"golang.org/x/term"
 
-	"sandbar/internal/catalog"
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
-	uxtheme "sandbar/internal/ui/theme"
+	"github.com/aetherbird/sandbar/internal/catalog"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 // CheckStatus is the outcome of one doctor probe.

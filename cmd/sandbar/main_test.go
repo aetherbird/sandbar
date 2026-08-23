@@ -14,10 +14,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"sandbar/internal/agent"
-	"sandbar/internal/backend"
-	"sandbar/internal/config"
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/agent"
+	"github.com/aetherbird/sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 func TestIsPipedFalse(t *testing.T) {

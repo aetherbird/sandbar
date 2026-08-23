@@ -10,7 +10,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 // llmRetryBackoff holds the waits before retry attempts 2 through 5, for five

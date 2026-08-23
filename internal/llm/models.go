@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 // ResolvedModel is a fully resolved model configuration.

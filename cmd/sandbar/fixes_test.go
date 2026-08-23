@@ -12,10 +12,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"sandbar/internal/agent"
-	"sandbar/internal/backend"
-	"sandbar/internal/config"
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/agent"
+	"github.com/aetherbird/sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 // ── Item 1: reverse-i-search ────────────────────────────────────────────────

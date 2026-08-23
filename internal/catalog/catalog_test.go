@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 func TestEmbeddedSnapshotParsesAndLooksUp(t *testing.T) {

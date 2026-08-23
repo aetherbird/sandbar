@@ -7,7 +7,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 const maxParallelToolCalls = 8

@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"sandbar/internal/config"
-	uxtheme "sandbar/internal/ui/theme"
+	"github.com/aetherbird/sandbar/internal/config"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 func withStyles(t *testing.T, next *styleSet) {

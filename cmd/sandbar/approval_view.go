@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 const (

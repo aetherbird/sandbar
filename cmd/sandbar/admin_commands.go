@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"sandbar/internal/cliadmin"
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/cliadmin"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 // runAdminCommand handles Sandbar's non-interactive administration command

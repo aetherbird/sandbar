@@ -14,13 +14,13 @@ test:
 build: build-cli
 
 build-cli:
-	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o sandbar ./cmd/cli
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o sandbar ./cmd/sandbar
 
 clean:
 	rm -f sandbar
 
 run:
-	go run ./cmd/cli
+	go run ./cmd/sandbar
 
 install: build-cli
 	install -Dm755 sandbar $(HOME)/.local/bin/sandbar

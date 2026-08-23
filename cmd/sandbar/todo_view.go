@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 // maxTodoPanelRows caps the sticky task panel above the input; longer lists

@@ -12,7 +12,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"sandbar/migrations"
+	"github.com/aetherbird/sandbar/migrations"
 )
 
 // Store wraps the SQLite database.

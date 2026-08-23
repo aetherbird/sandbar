@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func newApprovalTestRegistry(t *testing.T, tool Tool) *Registry {

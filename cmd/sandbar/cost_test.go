@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 func costTestConfig(provider string) *config.Config {

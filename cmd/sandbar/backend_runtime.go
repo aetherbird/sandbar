@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"sandbar/internal/agent"
-	"sandbar/internal/backend"
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
-	"sandbar/internal/mcp"
-	"sandbar/internal/memory"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/agent"
+	"github.com/aetherbird/sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/mcp"
+	"github.com/aetherbird/sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // parseToolAllowlist converts the --tools flag value into the canonical-name

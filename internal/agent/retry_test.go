@@ -10,7 +10,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 func TestIsRateLimitError(t *testing.T) {

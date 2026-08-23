@@ -6,8 +6,8 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/llm"
-	"sandbar/internal/testutil"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/testutil"
 )
 
 func TestAgentToolLoop(t *testing.T) {

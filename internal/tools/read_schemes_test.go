@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 func TestGhArgs(t *testing.T) {

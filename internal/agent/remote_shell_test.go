@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/llm"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // TestAgentRemoteShellExecExecutesOnFakeSSH proves the main chat loop accepts

@@ -11,7 +11,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 // ErrStreamIdle reports a provider connection that stopped delivering data:

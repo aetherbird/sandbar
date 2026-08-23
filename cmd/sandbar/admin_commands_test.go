@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/cliadmin"
+	"github.com/aetherbird/sandbar/internal/cliadmin"
 )
 
 func TestRunAdminCommandLeavesChatArgumentsAlone(t *testing.T) {

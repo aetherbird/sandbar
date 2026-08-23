@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 func TestApprovalPromptQueuesAndResolvesInOrder(t *testing.T) {

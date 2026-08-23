@@ -3,7 +3,7 @@ package tools
 import (
 	"fmt"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 // ApprovalConfigFromToolConfig converts the serializable runtime config into

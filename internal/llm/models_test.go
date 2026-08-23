@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func ptr[T any](v T) *T { return &v }

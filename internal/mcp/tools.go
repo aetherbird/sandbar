@@ -8,8 +8,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"sandbar/internal/config"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // Attach connects every configured server in parallel under BootBudget,

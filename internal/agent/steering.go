@@ -9,7 +9,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 // ErrNoActiveTurn reports that a message or interrupt was requested for a

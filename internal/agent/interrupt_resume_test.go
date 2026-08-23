@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"sandbar/internal/llm"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // TestAgentChatInterruptedTurnAnnouncesThreadID reproduces the session-killing

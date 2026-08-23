@@ -13,7 +13,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func TestChatStreamPlain(t *testing.T) {

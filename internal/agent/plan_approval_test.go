@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/llm"
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 func TestChatPlanTurnMarksPendingApproval(t *testing.T) {

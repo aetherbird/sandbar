@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 // CatalogURL is the refresh endpoint.

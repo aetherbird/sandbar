@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"sandbar/internal/agent"
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
-	"sandbar/internal/memory"
-	"sandbar/internal/persona"
+	"github.com/aetherbird/sandbar/internal/agent"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/persona"
 
 	openai "github.com/sashabaranov/go-openai"
 )

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func writeCoreConfig(t *testing.T, dir, workspace, database string) string {

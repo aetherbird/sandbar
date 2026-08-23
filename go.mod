@@ -1,4 +1,4 @@
-module sandbar
+module github.com/aetherbird/sandbar
 
 go 1.25.0
 

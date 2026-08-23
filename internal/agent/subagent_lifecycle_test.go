@@ -13,7 +13,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 // insertSubagentTask inserts an interrupted subagent task row directly so resume

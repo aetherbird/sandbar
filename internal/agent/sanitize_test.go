@@ -15,8 +15,8 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/llm"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 func sanitizeCall(id string) openai.ToolCall {

@@ -7,7 +7,7 @@ import (
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 	"github.com/muesli/termenv"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 func TestMarkdownRendererCacheTracksThemeAndColorProfile(t *testing.T) {

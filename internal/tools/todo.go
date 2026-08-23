@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 // PlanStore is the durable subset of memory.Store used by the todo tool. The

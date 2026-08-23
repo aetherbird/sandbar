@@ -1,20 +1,19 @@
-# Goreleaser config for Sandbar. Run from this directory (src/) with:
+# Goreleaser config for Sandbar. Run from the repo root with:
 #
 #   goreleaser release --snapshot --clean   # local check, no network needed
 #   goreleaser release --clean              # on a vX.Y.Z tag, publishes
 #                                            # a GitHub release (needs
 #                                            # GITHUB_TOKEN + public repo)
 #
-# The module path is still the pre-flip `sandbar` (see docs/RELEASE.md).
 # The version stamp uses main.version — the linker symbol for package main —
-# so it is module-path-independent and needs no change at the flip.
+# so it is module-path-independent.
 version: 2
 
 project_name: sandbar
 
 builds:
   - id: sandbar
-    main: ./cmd/cli
+    main: ./cmd/sandbar
     binary: sandbar
     env:
       - CGO_ENABLED=0

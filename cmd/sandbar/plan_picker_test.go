@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/backend"
 )
 
 type planCLIBackend struct {

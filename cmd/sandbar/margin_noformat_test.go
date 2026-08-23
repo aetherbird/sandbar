@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/backend"
 )
 
 // ── content margin ───────────────────────────────────────────────────────────

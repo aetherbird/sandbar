@@ -3,9 +3,9 @@ package main
 import (
 	"strings"
 
-	"sandbar/internal/catalog"
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/catalog"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
 )
 
 // Cost rollups: usage events are priced against the embedded models.dev

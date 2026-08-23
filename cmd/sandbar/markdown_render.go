@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"sandbar/internal/cliui"
+	"github.com/aetherbird/sandbar/internal/cliui"
 )
 
 var markdownPresentation cliui.MarkdownRenderer

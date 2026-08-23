@@ -16,8 +16,8 @@ import (
 	"github.com/muesli/termenv"
 	"golang.org/x/term"
 
-	"sandbar/internal/config"
-	uxtheme "sandbar/internal/ui/theme"
+	"github.com/aetherbird/sandbar/internal/config"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 // Semantic roles let callers describe intent without embedding terminal color

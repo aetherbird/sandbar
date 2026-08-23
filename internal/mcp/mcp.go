@@ -24,7 +24,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/config"
 )
 
 // BootBudget bounds the whole parallel connect phase so a hung server cannot

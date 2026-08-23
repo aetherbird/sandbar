@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/memory"
 )
 
 // TestTodoPerThreadIsolation verifies that todo lists are scoped per thread, so

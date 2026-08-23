@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/muesli/termenv"
 
-	uxtheme "sandbar/internal/ui/theme"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 type markdownRendererKey struct {

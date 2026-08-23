@@ -16,9 +16,9 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 type scriptedCompressionSummarizer struct {

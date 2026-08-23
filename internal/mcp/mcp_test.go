@@ -14,8 +14,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"sandbar/internal/config"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // The stdio tests re-execute this test binary as an MCP server. TestMain is

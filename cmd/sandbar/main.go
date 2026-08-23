@@ -26,14 +26,14 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"golang.org/x/term"
 
-	"sandbar/internal/agent"
-	"sandbar/internal/backend"
-	"sandbar/internal/cliui"
-	"sandbar/internal/config"
-	"sandbar/internal/llm"
-	"sandbar/internal/memory"
-	"sandbar/internal/persona"
-	"sandbar/internal/tools"
+	"github.com/aetherbird/sandbar/internal/agent"
+	"github.com/aetherbird/sandbar/internal/backend"
+	"github.com/aetherbird/sandbar/internal/cliui"
+	"github.com/aetherbird/sandbar/internal/config"
+	"github.com/aetherbird/sandbar/internal/llm"
+	"github.com/aetherbird/sandbar/internal/memory"
+	"github.com/aetherbird/sandbar/internal/persona"
+	"github.com/aetherbird/sandbar/internal/tools"
 )
 
 // spinFrames is the braille spinner shown in the status bar while streaming.

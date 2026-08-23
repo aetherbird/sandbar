@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	uxtheme "sandbar/internal/ui/theme"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 func (m *appModel) openThemePicker() tea.Cmd {

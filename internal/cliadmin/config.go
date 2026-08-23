@@ -14,8 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"sandbar/internal/config"
-	uxtheme "sandbar/internal/ui/theme"
+	"github.com/aetherbird/sandbar/internal/config"
+	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
 
 // ConfigScope identifies one of Sandbar's two configuration files.

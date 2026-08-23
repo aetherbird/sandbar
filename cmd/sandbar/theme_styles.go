@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"sandbar/internal/cliui"
+	"github.com/aetherbird/sandbar/internal/cliui"
 )
 
 // Keep short role names at existing call sites while the presentation package
