@@ -1,0 +1,74 @@
+# Goreleaser config for Sandbar. Run from this directory (src/) with:
+#
+#   goreleaser release --snapshot --clean   # local check, no network needed
+#   goreleaser release --clean              # on a vX.Y.Z tag, publishes
+#                                            # a GitHub release (needs
+#                                            # GITHUB_TOKEN + public repo)
+#
+# The module path is still the pre-flip `sandbar` (see docs/RELEASE.md).
+# The version stamp uses main.version — the linker symbol for package main —
+# so it is module-path-independent and needs no change at the flip.
+version: 2
+
+project_name: sandbar
+
+builds:
+  - id: sandbar
+    main: ./cmd/cli
+    binary: sandbar
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: sandbar
+    builds:
+      - sandbar
+    # install.sh derives asset names from this template; keep them in sync.
+    name: sandbar_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  # install.sh fetches this exact name (versionless on purpose so the
+  # releases/latest/download redirect works for it).
+  name_template: sandbar_checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+# Release mode: on a vX.Y.Z tag goreleaser publishes a GitHub release with the
+# archives and checksums above; nothing needs enabling here.
+
+# DEFERRED until the public repo exists (both pipes need a real repo URL):
+#
+# brews:
+#   - repository:
+#       owner: <owner>
+#       name: homebrew-tap
+#     homepage: https://github.com/<owner>/sandbar
+#     description: Terminal AI coding-agent harness
+#     license: MIT
+#     install: |
+#       bin.install "sandbar"
+#
+# scoop:
+#   - repository:
+#       owner: <owner>
+#       name: scoop-bucket
+#     homepage: https://github.com/<owner>/sandbar
+#     description: Terminal AI coding-agent harness
+#     license: MIT

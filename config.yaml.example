@@ -1,0 +1,85 @@
+workspace: "./workspace"   # file ops are jailed to this directory
+database:  "./sandbar.db"  # SQLite (pure-Go modernc.org/sqlite)
+
+persona:
+  name: "Sandbar"
+  # Preferred: keep the persona in its own Markdown file (relative paths
+  # resolve against this config's directory; absolute paths work too).
+  # The file wins over any inline system_prompt below.
+  system_prompt_file: "system-prompt.md"
+  # Legacy inline form, still supported for minimal configs:
+  # system_prompt: |
+  #   You are Sandbar, a precise agentic assistant running inside the Sandbar harness.
+  #   ...
+
+providers:
+  - name: openrouter-direct
+    base_url: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+    models:
+      google/gemini-3.1-flash-lite:
+        context_length: 262144
+    model_defaults:
+      supports_tools: true
+
+tools:
+  # Tool approval modes, from least to most restrictive:
+  # yolo = allow all; write = prompt for exec; always-ask = prompt for write+exec.
+  # Missing tool metadata is classified as exec. Exact rules override tiers,
+  # and both override the selected mode.
+  # Approving delegate_task/resume_task grants the delegated run as one broad
+  # boundary: mode-derived child prompts are not repeated, while explicit
+  # per-tool/per-tier deny and prompt rules remain in force inside subagents.
+  approval:
+    mode: "yolo"
+    rules: {}               # e.g. {shell_exec: prompt, image_generate: deny}
+    tiers: {}               # e.g. {write: prompt, exec: deny}
+  shell:
+    timeout: "30s"
+    blocked_commands:
+      - "rm -rf /"
+      - "chmod 777"
+  ssh:
+    # Remote shell_exec (host argument): the harness owns the ssh transport and
+    # quoting; the model passes a plain command. Any host works — none is special.
+    connect_timeout: 5s
+    batch_mode: true       # no interactive ssh prompts inside agent turns
+    allowed_hosts: []      # empty = any host from ~/.ssh/config; else exact allowlist
+    jobs:
+      max_jobs: 128
+      max_running: 16
+      output_bytes: 65536
+      retention: "30m"
+      termination_grace: "750ms"
+  web_search:
+    engine: "brave"
+    brave_api_key: "${BRAVE_API_KEY}"
+
+# Model Context Protocol servers, keyed by name. Tools a server advertises
+# register as mcp_<server>_<tool> and default to write-tier approval (override
+# per tool via tools.approval.rules). A server that fails to start or
+# handshake is skipped with a warning; it never blocks startup.
+# mcp_servers:
+#   filesystem:                     # stdio child process
+#     type: local
+#     command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+#     timeout_ms: 5000              # bounds spawn + initialize; 0 = boot budget only
+#   graph:                          # streamable HTTP endpoint
+#     type: remote
+#     url: "https://mcp.example.com/mcp"
+#     headers:
+#       Authorization: "Bearer ${MCP_TOKEN}"
+#     timeout_ms: 5000
+
+compression:
+  enabled: true
+  threshold: 0.80
+  target_ratio: 0.20
+  min_summary_tokens: 1000
+  max_summary_tokens: 12000
+  model: ""    # empty = use current model; set to a fast model alias for compression summaries
+
+subagent:
+  model: ""    # empty = default sub-agent model; set to a fast model alias
+  # Cap on delegated sub-agent turns; 0 disables the cap (unlimited).
+  max_turns: 30

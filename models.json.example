@@ -1,0 +1,37 @@
+{
+  "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "${OPENAI_API_KEY}",
+      "models": [
+        { "id": "gpt-4o-mini", "contextWindow": 128000 },
+        { "id": "o4-mini", "contextWindow": 200000, "maxTokens": 100000 }
+      ]
+    },
+    "anthropic-latest": {
+      "baseUrl": "https://api.anthropic.com/v1",
+      "api": "anthropic-messages",
+      "apiKey": "!pass show anthropic/api-key",
+      "models": [
+        { "id": "claude-sonnet-4", "name": "Claude Sonnet 4", "contextWindow": 200000, "maxTokens": 8192 }
+      ]
+    },
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "compat": {
+        "requiresToolResultName": true,
+        "maxTokensField": "max_completion_tokens"
+      },
+      "models": [
+        {
+          "id": "qwen3",
+          "name": "Qwen3 14B",
+          "contextWindow": 40960,
+          "maxTokens": 8192,
+          "modelId": "qwen3:14b"
+        }
+      ]
+    }
+  }
+}

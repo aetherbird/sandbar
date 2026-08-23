@@ -1,0 +1,18 @@
+workspace: "./workspace"
+database: "./sandbar.db"
+
+providers:
+  - name: bad-provider
+    base_url: "http://example.com/v1"
+    api_key: ""
+    models:
+      bad-model:
+        context_length: 0
+
+tools:
+  shell:
+    timeout: "30s"
+    blocked_commands: []
+  web_search:
+    engine: "brave"
+    brave_api_key: ""

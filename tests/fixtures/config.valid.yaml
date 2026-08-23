@@ -1,0 +1,36 @@
+workspace: "./workspace"
+database: "./sandbar.db"
+
+persona:
+  name: "Sandbar"
+  # Fixture uses the legacy inline form so TestLoadValid keeps covering it;
+  # production configs use system_prompt_file (see src/config.yaml).
+  system_prompt: "You are a fixture persona for config tests."
+
+providers:
+  - name: openrouter-direct
+    base_url: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+    models:
+      google/gemini-3.1-flash-lite:
+        context_length: 262144
+    model_defaults:
+      supports_tools: true
+
+  - name: local-ollama
+    base_url: "http://localhost:11434/v1"
+    api_key: ""
+    models:
+      gemma4:
+        context_length: 262144
+    model_defaults:
+      supports_tools: true
+
+tools:
+  shell:
+    timeout: "30s"
+    blocked_commands:
+      - "rm -rf /"
+  web_search:
+    engine: "brave"
+    brave_api_key: ""

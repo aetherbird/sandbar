@@ -1,0 +1,13 @@
+/sandbar
+*.db
+*.db-shm
+*.db-wal
+*.log
+coverage*.out
+*.out
+dist/
+.DS_Store
+*.exe
+certs/
+.tmp-build/
+bin/
