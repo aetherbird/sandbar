@@ -4,8 +4,6 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/aetherbird/sandbar/internal/cliui"
 )
 
@@ -66,11 +64,11 @@ func currentStyles() *styleSet {
 
 // sty remains a narrow migration bridge for render helpers that do not own an
 // appModel. New stateful views read their immutable style pointer from the model.
-func sty(role string) lipgloss.Style { return currentStyles().Style(role) }
+func sty(role string) cliui.Style { return currentStyles().Style(role) }
 
 // userEchoStyle renders the user's own sent messages: bold in the success role,
 // so prompts read distinctly from assistant output. Both the live echo and the
 // resumed-transcript replay use it, keeping the two visually identical.
-func userEchoStyle() lipgloss.Style { return sty(cGreen).Bold(true) }
+func userEchoStyle() cliui.Style { return sty(cGreen).Bold(true) }
 
 func formatThemeList() string { return cliui.FormatThemeList() }

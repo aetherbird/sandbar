@@ -40,7 +40,7 @@ func (m *appModel) installTheme(name string) error {
 	m.sess.styles = next
 	m.sess.themeName = next.RequestedTheme()
 	setActiveStyleSet(next)
-	applyTextareaV2Style(&m.ta, next)
+	next.ApplyTextarea(&m.ta)
 	return nil
 }
 

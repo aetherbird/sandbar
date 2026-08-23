@@ -10,8 +10,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/muesli/termenv"
 
+	"github.com/aetherbird/sandbar/internal/cliui"
 	"github.com/aetherbird/sandbar/internal/config"
 	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
@@ -56,7 +56,7 @@ func TestEveryThemeBuildsSemanticStyles(t *testing.T) {
 			if s.Palette().ID != id {
 				t.Fatalf("resolved palette = %q, want %q", s.Palette().ID, id)
 			}
-			if s.ColorProfile() != termenv.ANSI256 {
+			if s.ColorProfile() != cliui.ProfileANSI256 {
 				t.Fatalf("profile = %v, want forced non-TTY ANSI256 fallback", s.ColorProfile())
 			}
 			for _, role := range roles {
@@ -98,7 +98,7 @@ func TestNoColorDisablesSGRAcrossRenderedOutput(t *testing.T) {
 	if s.ColorsEnabled() {
 		t.Fatal("NO_COLOR with auto mode should disable colors")
 	}
-	if profile := s.ColorProfile(); profile != termenv.Ascii {
+	if profile := s.ColorProfile(); profile != cliui.ProfileAscii {
 		t.Fatalf("profile = %v, want ASCII", profile)
 	}
 
@@ -127,7 +127,7 @@ func TestMarkdownRendererInvalidatesForThemeAndProfile(t *testing.T) {
 	}
 	withStyles(t, light)
 	lightOutput := renderMarkdown("# Sandbar\n\n`code`")
-	if light.Palette().ID != "light" || light.ColorProfile() != termenv.ANSI256 {
+	if light.Palette().ID != "light" || light.ColorProfile() != cliui.ProfileANSI256 {
 		t.Fatalf("light presentation = theme %q profile %v", light.Palette().ID, light.ColorProfile())
 	}
 
@@ -137,7 +137,7 @@ func TestMarkdownRendererInvalidatesForThemeAndProfile(t *testing.T) {
 	}
 	setActiveStyleSet(dark)
 	darkOutput := renderMarkdown("# Sandbar\n\n`code`")
-	if dark.Palette().ID != "dark" || dark.ColorProfile() != termenv.ANSI256 {
+	if dark.Palette().ID != "dark" || dark.ColorProfile() != cliui.ProfileANSI256 {
 		t.Fatalf("dark presentation = theme %q profile %v", dark.Palette().ID, dark.ColorProfile())
 	}
 	if darkOutput == lightOutput {
@@ -150,7 +150,7 @@ func TestMarkdownRendererInvalidatesForThemeAndProfile(t *testing.T) {
 	}
 	setActiveStyleSet(plain)
 	plainOutput := renderMarkdown("# Sandbar\n\n`code`")
-	if plain.Palette().ID != "dark" || plain.ColorProfile() != termenv.Ascii {
+	if plain.Palette().ID != "dark" || plain.ColorProfile() != cliui.ProfileAscii {
 		t.Fatalf("plain presentation = theme %q profile %v", plain.Palette().ID, plain.ColorProfile())
 	}
 	if strings.Contains(plainOutput, "\x1b[") {

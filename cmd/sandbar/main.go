@@ -361,7 +361,7 @@ func newModel(sess *session) appModel {
 	ta.SetHeight(inputMaxHeight)
 	ta.MaxHeight = inputMaxHeight
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"), key.WithDisabled())
-	applyTextareaV2Style(&ta, styles)
+	styles.ApplyTextarea(&ta)
 
 	var hist []string
 	if b, err := os.ReadFile(historyPath()); err == nil {
