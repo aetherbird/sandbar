@@ -4,9 +4,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	"github.com/charmbracelet/glamour/styles"
+	"charm.land/glamour/v2"
+	glamouransi "charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
 	"github.com/muesli/termenv"
 
 	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
@@ -88,7 +88,6 @@ func (m *MarkdownRenderer) Render(s *Styles, text string) string {
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithStyles(markdownStyle(s)),
 			glamour.WithWordWrap(0),
-			glamour.WithColorProfile(profile),
 		)
 		if err != nil {
 			return text

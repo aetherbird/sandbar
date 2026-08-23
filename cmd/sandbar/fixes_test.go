@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/aetherbird/sandbar/internal/agent"
 	"github.com/aetherbird/sandbar/internal/backend"
@@ -31,16 +31,16 @@ func TestReverseSearchEnterSendsAndExits(t *testing.T) {
 	m.histIdx = 2
 
 	// Enter search mode and type "beta".
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	m = upd.(appModel)
-	upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beta")})
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "beta"})
 	m = upd.(appModel)
 	if m.searchMode != "reverse" || m.searchMatch != 1 {
 		t.Fatalf("search state: mode=%q match=%d, want reverse/1", m.searchMode, m.searchMatch)
 	}
 
 	// Enter submits through the normal path and exits search mode.
-	upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = upd.(appModel)
 	if m.searchMode != "" {
 		t.Fatalf("searchMode after Enter = %q, want cleared", m.searchMode)
@@ -124,8 +124,8 @@ func TestSuggestBranchesClipTextarea(t *testing.T) {
 	m.ta.SetValue("/")
 	m.width = 100
 	withPopup := m.View()
-	plainLines := strings.Count(plain, "\n")
-	popupLines := strings.Count(withPopup, "\n")
+	plainLines := strings.Count(plain.Content, "\n")
+	popupLines := strings.Count(withPopup.Content, "\n")
 	// The popup adds its own rows; the input block below must contribute the
 	// same single row as the plain view, not the full 15-row viewport.
 	if popupLines-plainLines > 6 { // 17 suggestions + hint on a 100-col terminal
@@ -206,9 +206,9 @@ func TestSendKeepsRawHistoryAndEcho(t *testing.T) {
 	m.streamGen = 1
 	m.streamCh = make(chan streamItem)
 
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("read @" + p)})
+	upd, _ := m.Update(tea.KeyPressMsg{Text: "read @" + p})
 	m = upd.(appModel)
-	upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = upd.(appModel)
 
 	if len(m.history) != 1 || m.history[0] != "read @"+p {
@@ -293,9 +293,9 @@ func TestShellEscapePrintsHintAndHistory(t *testing.T) {
 	m.streamGen = 1
 	m.streamCh = make(chan streamItem)
 
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!echo hi")})
+	upd, _ := m.Update(tea.KeyPressMsg{Text: "!echo hi"})
 	m = upd.(appModel)
-	upd, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = upd.(appModel)
 
 	if len(m.history) != 1 || m.history[0] != "!echo hi" {
@@ -368,7 +368,7 @@ func TestEscDismissesSlashPopupKeepsText(t *testing.T) {
 	if len(m.slashSuggestions()) == 0 {
 		t.Fatal("precondition: suggestions visible")
 	}
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = upd.(appModel)
 	if v := m.ta.Value(); v != "/mod" {
 		t.Fatalf("Esc wiped input: %q", v)
@@ -585,9 +585,9 @@ func TestReverseSearchEnterSendsWithPathMatch(t *testing.T) {
 	m.history = []string{"read " + filepath.Join(dir, "sub") + "/notes.md"}
 	m.histIdx = 1
 
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	m = upd.(appModel)
-	upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("notes")})
+	upd, _ = m.Update(tea.KeyPressMsg{Text: "notes"})
 	m = upd.(appModel)
 	if m.searchMatch != 0 {
 		t.Fatalf("match = %d, want 0", m.searchMatch)
@@ -597,7 +597,7 @@ func TestReverseSearchEnterSendsWithPathMatch(t *testing.T) {
 		t.Fatal("precondition: path popup should be triggerable for this value")
 	}
 
-	upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = upd.(appModel)
 	if m.searchMode != "" {
 		t.Fatal("searchMode not cleared")

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/aetherbird/sandbar/internal/backend"
 	"github.com/aetherbird/sandbar/internal/config"

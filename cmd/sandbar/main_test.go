@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/aetherbird/sandbar/internal/agent"
 	"github.com/aetherbird/sandbar/internal/backend"
@@ -190,7 +190,7 @@ func TestViewRendersStatusBar(t *testing.T) {
 	m := newModel(&session{modelAlias: "openrouter/some-model"})
 	m.width = 100
 	m.ctxUsed, m.ctxMax = 50, 1000
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 	if !strings.Contains(out, "some-model") {
 		t.Errorf("View should show the model name, got: %q", out)
 	}
@@ -206,7 +206,7 @@ func TestViewPlainBranchClipsTextarea(t *testing.T) {
 	m := newModel(&session{modelAlias: "openrouter/some-model"})
 	m.width = 100
 	m.ctxUsed, m.ctxMax = 50, 1000
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 4 {
 		t.Errorf("idle View with empty input: got %d lines, want 4 (div, input, div, status):\n%s", len(lines), out)
@@ -448,7 +448,7 @@ func TestModelPickerEscGoesBackToProviders(t *testing.T) {
 		t.Fatalf("expected model submenu, got %q", m.pickMode)
 	}
 	// Esc from the model submenu steps back to the provider list.
-	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	tm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got := tm.(appModel).pickMode; got != "provider" {
 		t.Errorf("Esc from model submenu should return to provider list, got %q", got)
 	}
@@ -581,7 +581,7 @@ func TestSlashSuggestPopupInView(t *testing.T) {
 	m := newModel(&session{modelAlias: "m"})
 	m.width = 100
 	m.ta.SetValue("/")
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 	if !strings.Contains(out, "/model") || !strings.Contains(out, "Tab complete") {
 		t.Errorf("typing / should surface the autocomplete popup:\n%s", out)
 	}

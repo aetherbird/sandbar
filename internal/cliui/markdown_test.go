@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamouransi "charm.land/glamour/v2/ansi"
 	"github.com/muesli/termenv"
 
 	"github.com/aetherbird/sandbar/internal/config"

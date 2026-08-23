@@ -19,9 +19,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/sashabaranov/go-openai"
 	"golang.org/x/term"
@@ -343,8 +344,8 @@ func newModel(sess *session) appModel {
 	ta.Focus()
 	// Show the "> " prompt only on the first visual row; wrapped/continuation
 	// rows get blank padding of the same width so the text stays aligned.
-	ta.SetPromptFunc(2, func(lineIdx int) string {
-		if lineIdx == 0 {
+	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
 			return "> "
 		}
 		return "  "
@@ -359,8 +360,8 @@ func newModel(sess *session) appModel {
 	ta.SetWidth(initWidth)
 	ta.SetHeight(inputMaxHeight)
 	ta.MaxHeight = inputMaxHeight
-	ta.KeyMap.InsertNewline.SetEnabled(false)
-	styles.ApplyTextarea(&ta)
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"), key.WithDisabled())
+	applyTextareaV2Style(&ta, styles)
 
 	var hist []string
 	if b, err := os.ReadFile(historyPath()); err == nil {
@@ -381,7 +382,7 @@ func newModel(sess *session) appModel {
 
 func (m appModel) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink,
+		func() tea.Msg { return textarea.Blink() },
 		tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }),
 	)
 }
@@ -653,30 +654,25 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	// ── keyboard ─────────────────────────────────────────────────────────────
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if len(m.approvals) > 0 {
-			switch msg.Type {
-			case tea.KeyRunes:
-				if len(msg.Runes) == 1 {
-					switch msg.Runes[0] {
-					case 'y', 'Y':
-						m.resolveCurrentApproval(tools.PolicyAllow, "approved in CLI")
-						return m, nil
-					case 'n', 'N':
-						m.resolveCurrentApproval(tools.PolicyDeny, "denied in CLI")
-						return m, nil
-					}
-				}
-			case tea.KeyEsc:
+			switch msg.String() {
+			case "y", "Y":
+				m.resolveCurrentApproval(tools.PolicyAllow, "approved in CLI")
+				return m, nil
+			case "n", "N":
 				m.resolveCurrentApproval(tools.PolicyDeny, "denied in CLI")
 				return m, nil
-			case tea.KeyCtrlC:
+			case "esc":
+				m.resolveCurrentApproval(tools.PolicyDeny, "denied in CLI")
+				return m, nil
+			case "ctrl+c":
 				m.resolveCurrentApproval(tools.PolicyDeny, "turn cancelled during approval")
 				if m.cancel != nil {
 					m.cancel()
 				}
 				return m, nil
-			case tea.KeyCtrlD:
+			case "ctrl+d":
 				saveHistory(m.history)
 				m.resolveCurrentApproval(tools.PolicyDeny, "turn cancelled during approval")
 				if m.cancel != nil {
@@ -697,11 +693,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// clear search mode. Quit/redraw keys fall through so they keep
 		// working while searching.
 		if m.searchMode == "reverse" {
-			switch msg.Type {
-			case tea.KeyEsc:
+			switch msg.String() {
+			case "esc":
 				m.searchMode = "" // exit search mode, keep the matched text
 				return m, nil
-			case tea.KeyEnter:
+			case "enter":
 				// Accept the match: exit search mode and fall through so the
 				// main Enter handler submits the textarea's value normally.
 				// Completion popups are suppressed for this keypress — a
@@ -710,28 +706,30 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMode = ""
 				m.slashDismissed = true
 				m.pathDismissed = true
-			case tea.KeyBackspace:
+			case "backspace":
 				if r := []rune(m.searchQuery); len(r) > 0 {
 					m.searchQuery = string(r[:len(r)-1])
 				}
 				m.doReverseSearch()
 				return m, nil
-			case tea.KeyCtrlR:
+			case "ctrl+r":
 				m.cycleReverseSearch()
 				return m, nil
-			case tea.KeyRunes:
-				m.searchQuery += string(msg.Runes)
-				m.doReverseSearch()
-				return m, nil
-			case tea.KeyCtrlC, tea.KeyCtrlD, tea.KeyCtrlL:
+			case "ctrl+c", "ctrl+d", "ctrl+l":
 				// handled by the main switch below
 			default:
-				return m, nil // swallow all other key types in search mode
+				// Append printable input (v1 tea.KeyRunes equivalent); swallow
+				// everything else in search mode.
+				if msg.Text != "" {
+					m.searchQuery += msg.Text
+					m.doReverseSearch()
+				}
+				return m, nil
 			}
 		}
-		switch msg.Type {
+		switch msg.String() {
 
-		case tea.KeyCtrlC:
+		case "ctrl+c":
 			if m.escapeRunning && m.escapeCancel != nil {
 				// First Ctrl+C during a "!" shell escape cancels the command;
 				// the escape's own completion (or the cancel) clears the flag,
@@ -753,7 +751,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			saveHistory(m.history)
 			return m, tea.Quit
 
-		case tea.KeyCtrlD:
+		case "ctrl+d":
 			saveHistory(m.history)
 			if m.streaming && m.cancel != nil {
 				// Don't quit mid-write: cancel the turn and defer the quit
@@ -769,13 +767,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
-		case tea.KeyCtrlL:
+		case "ctrl+l":
 			// Force a clean repaint to recover from inline-renderer drift
 			// (ghost dividers, leaked prompt, post-resize artifacts). Matches
 			// the bash/zsh/vim Ctrl+L convention; also available as /redraw.
 			return m, tea.ClearScreen
 
-		case tea.KeyCtrlR:
+		case "ctrl+r":
 			// Enter reverse-i-search mode.
 			if m.streaming || m.pickMode != "" {
 				return m, nil
@@ -785,7 +783,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchMatch = -1
 			return m, nil
 
-		case tea.KeyEsc:
+		case "esc":
 			if m.pickMode == "model" && m.pickProvider != "" {
 				return m, m.openProviderPicker() // step back to the provider list
 			}
@@ -819,7 +817,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyTab:
+		case "tab":
 			// Complete the highlighted slash command (leaves a trailing space for args).
 			if sugg := m.slashSuggestions(); len(sugg) > 0 {
 				m.ta.SetValue(sugg[m.clampedSlashSel(len(sugg))].name + " ")
@@ -835,7 +833,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyUp:
+		case "up":
 			if m.pickMode != "" {
 				m.movePick(-1)
 				return m, nil
@@ -876,7 +874,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputHeight() // recalled message may span multiple rows
 			return m, nil
 
-		case tea.KeyDown:
+		case "down":
 			if m.pickMode != "" {
 				m.movePick(1)
 				return m, nil
@@ -917,7 +915,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputHeight()
 			return m, nil
 
-		case tea.KeyEnter:
+		case "enter", "alt+enter":
 			// A pending /model or /sessions menu selects the highlighted row.
 			if m.pickMode != "" {
 				return m, m.selectPick()
@@ -941,8 +939,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// a backslash, consume it and insert a newline — this is the usual
 			// shell continuation convention and works in every terminal.
 			val := m.ta.Value()
-			if msg.Alt || strings.HasSuffix(strings.TrimRight(val, " "), "\\") {
-				if msg.Alt {
+			alt := msg.String() == "alt+enter"
+			if alt || strings.HasSuffix(strings.TrimRight(val, " "), "\\") {
+				if alt {
 					m.ta.InsertString("\n")
 				} else {
 					// Remove trailing backslash (and any trailing spaces) and
@@ -1062,7 +1061,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m appModel) View() string {
+func (m appModel) View() tea.View {
 	div := sty(cBorder).Render(strings.Repeat("─", m.width))
 	stat := m.statusLine()
 	mid := ""
@@ -1097,7 +1096,7 @@ func (m appModel) View() string {
 	if dv := m.dockedPanelsView(); dv != "" {
 		mid = dv + "\n" + mid
 	}
-	return fmt.Sprintf("%s\n%s\n%s\n%s", div, mid, div, stat)
+	return tea.NewView(fmt.Sprintf("%s\n%s\n%s\n%s", div, mid, div, stat))
 }
 
 // dockedPanelsView renders the panels docked above the input — subagent HUD
@@ -2792,7 +2791,9 @@ func runBubbleTea(sess *session) {
 	go func() {
 		select {
 		case <-sigCtx.Done():
-			p.Send(tea.KeyMsg{Type: tea.KeyCtrlD})
+			// v2 idiom: a synthetic Ctrl+D key press reaches the same drain
+			// path the real keystroke would take.
+			p.Send(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 		case <-progDone:
 		}
 	}()

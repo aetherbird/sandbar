@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	uxtheme "github.com/aetherbird/sandbar/internal/ui/theme"
 )
@@ -40,7 +40,7 @@ func (m *appModel) installTheme(name string) error {
 	m.sess.styles = next
 	m.sess.themeName = next.RequestedTheme()
 	setActiveStyleSet(next)
-	next.ApplyTextarea(&m.ta)
+	applyTextareaV2Style(&m.ta, next)
 	return nil
 }
 
