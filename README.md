@@ -1,12 +1,12 @@
 # Sandbar
 
-Sandbar is a standalone terminal AI coding-agent harness written in Go. It
-gives you a streaming REPL backed by any OpenAI-compatible model endpoint —
-cloud (OpenRouter, OpenAI, Gemini) or local (Ollama, llama.cpp, vLLM) — with
-15 built-in tools behind tiered approvals, a SQLite thread store with
-full-text search, automatic context compression, subagents, plan mode, themes,
-and a `--json` event stream for scripting. It boots with zero configuration
-from `OPENAI_API_KEY`, ships as a single static binary, and has no server
+Sandbar is a standalone terminal AI coding-agent harness in Go: a streaming
+REPL backed by any OpenAI-compatible model endpoint — cloud (OpenRouter,
+OpenAI, Gemini) or local (Ollama, llama.cpp, vLLM) — with 15 built-in tools
+behind tiered approvals, a SQLite thread store with full-text search,
+automatic context compression, subagents, plan mode, themes, and a `--json`
+event stream for scripting. It boots with zero configuration from
+`OPENAI_API_KEY`, ships as a single static binary, and has no server
 component and no telemetry: everything runs and stays on your machine.
 
 ## Features

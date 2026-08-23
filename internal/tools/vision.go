@@ -108,15 +108,6 @@ func VisionAnalyze(ctx context.Context, args map[string]interface{}) (string, er
 	return result.Choices[0].Message.Content, nil
 }
 
-// AnalyzeVisionDirect is the standalone endpoint version — takes typed params directly.
-func AnalyzeVisionDirect(ctx context.Context, imagePath, question, apiKey string) (string, error) {
-	return VisionAnalyze(ctx, map[string]interface{}{
-		"image_path":         imagePath,
-		"question":           question,
-		"openrouter_api_key": apiKey,
-	})
-}
-
 func detectMIME(path string) string {
 	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
 	switch ext {

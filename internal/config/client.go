@@ -57,7 +57,6 @@ func normalizeColorMode(mode string) string {
 func LoadClientConfig() (*ClientConfig, error) {
 	path := clientConfigPath()
 
-	// If file doesn't exist, create it with commented template.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, fmt.Errorf("create config dir: %w", err)

@@ -242,7 +242,7 @@ func TestToolPreview(t *testing.T) {
 		args string
 		want string
 	}{
-		{"shell_exec", `{"command":"ls -la /quests"}`, "ls -la /quests"},
+		{"shell_exec", `{"command":"ls -la /home/user"}`, "ls -la /home/user"},
 		{"file_read", `{"path":"docs/SPEC.md"}`, "docs/SPEC.md"},
 		{"search_files", `{"pattern":"func main","path":"."}`, "func main"},
 		{"git", `{"action":"status"}`, "status"},

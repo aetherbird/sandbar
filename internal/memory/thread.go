@@ -598,7 +598,6 @@ func (s *Store) DeleteMessagesAfter(threadID string, seq int) error {
 	if err != nil {
 		return fmt.Errorf("delete messages after: %w", err)
 	}
-	// Invalidate compression records that now point to deleted messages.
 	if invErr := s.InvalidateCompressionsAfterSeq(threadID, seq); invErr != nil {
 		return fmt.Errorf("invalidate compressions after delete: %w", invErr)
 	}

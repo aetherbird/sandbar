@@ -20,11 +20,9 @@ type SearchResult struct {
 // SearchMessages performs a full-text search across all messages.
 // Uses SQLite FTS5 with the bm25 ranking function.
 //
-// NOTE: Compression summaries are intentionally excluded from FTS search.
-// They live in the `compressions` table, not `messages`, and are not indexed
-// into `messages_fts`. This follows the robustness spec recommendation:
-// do not index synthetic compression summaries into user-facing search unless
-// clearly labeled as summaries.
+// Compression summaries are intentionally excluded from FTS search: they live
+// in the compressions table, not messages, and are not indexed into
+// messages_fts.
 func (s *Store) SearchMessages(query string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
@@ -92,7 +90,6 @@ func makeSnippet(text, query string, maxLen int) string {
 	if len(runes) <= maxLen {
 		return text
 	}
-	// Find first occurrence of query substring (case-insensitive).
 	idx := indexOfIgnoreCase(text, query)
 	if idx == -1 {
 		// Fallback: just truncate from start.

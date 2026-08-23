@@ -141,7 +141,6 @@ full output. Do not invent completion, successful tests, or workspace state.`
 			Content: instruction,
 		},
 	}
-	// Append the messages to summarize as the user turn.
 	text := formatMessagesForCompression(req.Messages)
 	prompt = append(prompt, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
@@ -1368,7 +1367,6 @@ func prepareCompressionBatch(batch []openai.ChatCompletionMessage) ([]openai.Cha
 // ----------------------------------------------------------------------------
 
 // buildCompressionStartEvent creates a CompressionEvent for the start of compression.
-// It carries the model info and threshold metadata before the summarizer runs.
 func buildCompressionStartEvent(result CompressionResult, thresholdTokens int) *llm.CompressionEvent {
 	return &llm.CompressionEvent{
 		ModelAlias:             result.SummaryModelAlias,
@@ -1382,7 +1380,6 @@ func buildCompressionStartEvent(result CompressionResult, thresholdTokens int) *
 	}
 }
 
-// buildCompressionEndEvent creates a CompressionEvent for a completed compression.
 func buildCompressionEndEvent(result CompressionResult) *llm.CompressionEvent {
 	ev := &llm.CompressionEvent{
 		Outcome:                 string(result.Outcome),
@@ -1408,7 +1405,6 @@ func buildCompressionEndEvent(result CompressionResult) *llm.CompressionEvent {
 	return ev
 }
 
-// buildCompressionErrorEvent creates a CompressionEvent for a failed compression.
 func buildCompressionErrorEvent(result CompressionResult) *llm.CompressionEvent {
 	ev := buildCompressionEndEvent(result)
 	if result.Err != nil {
@@ -1434,9 +1430,9 @@ func buildCompressionAuxiliaryUsageEvent(result CompressionResult) *llm.StreamEv
 	}
 }
 
-// shouldAttemptCompression returns true if compression should be attempted
-// (enough tokens to trigger the threshold). Used to decide whether to emit
-// compression_start before calling compressIfNeeded.
+// shouldAttemptCompression returns true when the thread exceeds its
+// compression budget. Used to decide whether to emit compression_start
+// before calling compressIfNeeded.
 func shouldAttemptCompression(msgs []indexedMessage, contextLength int, cfg config.CompressionConfig) bool {
 	if contextLength <= 0 || !cfg.Enabled {
 		return false
@@ -1456,15 +1452,13 @@ func shouldAttemptCompression(msgs []indexedMessage, contextLength int, cfg conf
 // Helpers
 // ----------------------------------------------------------------------------
 
-// pruneOldToolOutputs caps oversized tool outputs in older (non-recent) messages.
-// "Recent" is defined as the latest user turn and everything after it (which may
-// include assistant tool_calls and tool results from the current ReAct turn).
-// The system prompt (index 0) is never pruned.
+// pruneOldToolOutputs caps oversized tool outputs in messages older than the
+// latest user turn; the latest turn and everything after it are "recent" and
+// left alone, as is the system prompt (index 0).
 // Returns the modified message list and the count of pruned tool outputs.
 func pruneOldToolOutputs(msgs []indexedMessage) ([]indexedMessage, int) {
 	const maxOutputLen = 2000
 
-	// Find the index of the latest user message.
 	lastUserIdx := -1
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Msg.Role == openai.ChatMessageRoleUser {
@@ -1473,7 +1467,7 @@ func pruneOldToolOutputs(msgs []indexedMessage) ([]indexedMessage, int) {
 		}
 	}
 
-	// If no user turn exists, treat all messages as recent (prune nothing).
+	// No user turn means everything is recent — prune nothing.
 	if lastUserIdx < 0 {
 		result := make([]indexedMessage, len(msgs))
 		copy(result, msgs)
@@ -1485,7 +1479,6 @@ func pruneOldToolOutputs(msgs []indexedMessage) ([]indexedMessage, int) {
 	pruned := 0
 
 	for i := range result {
-		// Skip system prompt.
 		if i == 0 {
 			continue
 		}
@@ -1493,7 +1486,6 @@ func pruneOldToolOutputs(msgs []indexedMessage) ([]indexedMessage, int) {
 		if lastUserIdx >= 0 && i >= lastUserIdx {
 			continue
 		}
-		// Only prune tool messages.
 		if result[i].Msg.Role != "tool" {
 			continue
 		}
@@ -1502,14 +1494,11 @@ func pruneOldToolOutputs(msgs []indexedMessage) ([]indexedMessage, int) {
 			continue
 		}
 
-		// Preserve useful metadata.
 		truncated := content[:maxOutputLen]
 		lines := strings.Count(content, "\n") + 1
-		// Extract tool name from preceding assistant message if possible.
+		// Resolve the tool name from the preceding assistant group's call ID.
 		toolName := "tool"
 		if i > 0 && result[i-1].Msg.Role == openai.ChatMessageRoleAssistant {
-			// The tool call ID links this tool result to a specific tool call
-			// in the assistant message. Build a lookup.
 			toolCallID := result[i].Msg.ToolCallID
 			for _, tc := range result[i-1].Msg.ToolCalls {
 				if tc.ID == toolCallID && tc.Function.Name != "" {
@@ -1663,7 +1652,6 @@ func minimalSafeIndexedPayload(msgs []indexedMessage) []indexedMessage {
 }
 
 // wrapMessages wraps plain OpenAI messages as indexedMessages without Seq metadata.
-// Used as a compatibility shim while buildMessages() still returns raw messages.
 func wrapMessages(msgs []openai.ChatCompletionMessage) []indexedMessage {
 	out := make([]indexedMessage, len(msgs))
 	for i, m := range msgs {

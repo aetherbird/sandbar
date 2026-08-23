@@ -205,12 +205,9 @@ func rgSearch(ctx context.Context, cancel context.CancelFunc, path, pattern, tar
 
 // ─── Pure-Go fallback walker ────────────────────────────────────────────────
 //
-// goSearch reproduces the ripgrep invocation's observable behavior when rg is
-// not installed: same match semantics (regex content search, case-insensitive
-// literal filename search), same skipping (hidden entries — rg runs without
-// --hidden — plus .git and the usual build/vendor junk), same result format
-// ("relative/path:line:text" for content, bare relative paths for files), and
-// the same one-past-the-limit truncation marker.
+// goSearch reproduces ripgrep's observable behavior when rg is not installed:
+// same match semantics, hidden-entry and directory skipping, result format,
+// and one-past-the-limit truncation marker.
 
 const (
 	goSearchMaxFileBytes = 1 << 20 // skip files larger than 1MB

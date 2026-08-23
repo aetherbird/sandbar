@@ -116,25 +116,6 @@ func PreferredTheme(flagValue, envValue, configured string) string {
 	return uxtheme.System
 }
 
-// TerminalSupportsColor applies the CLI's explicit color mode and conventional
-// automatic terminal checks. An explicit "always" overrides NO_COLOR; auto
-// honors it.
-func TerminalSupportsColor(mode string, output *os.File) bool {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case config.ColorModeAlways:
-		return true
-	case config.ColorModeNever:
-		return false
-	}
-	if _, disabled := os.LookupEnv("NO_COLOR"); disabled {
-		return false
-	}
-	if strings.EqualFold(os.Getenv("TERM"), "dumb") {
-		return false
-	}
-	return output != nil && term.IsTerminal(int(output.Fd()))
-}
-
 // detectProfile resolves the terminal color capability for a color mode. It is
 // pure so tests can exercise the full environment matrix without a pty:
 //

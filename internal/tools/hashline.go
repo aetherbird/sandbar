@@ -8,12 +8,10 @@ import (
 )
 
 // hashPrefixLen is the number of hex characters used as a line hash.
-// 8 chars (4 bytes) gives 2^32 possible values — enough for
-// typical files without collision risk in the edit context.
+// 8 hex chars (2^32 values) is enough to avoid collisions in edit context.
 const hashPrefixLen = 8
 
-// lineHash returns a short hex hash of the line content (without
-// trailing newline). The same content always produces the same hash.
+// lineHash returns a short hex hash of the line content (without trailing newline).
 func lineHash(line string) string {
 	sum := sha256.Sum256([]byte(line))
 	return hex.EncodeToString(sum[:])[:hashPrefixLen]
@@ -46,7 +44,6 @@ func parseHashline(text string) []hashlineRef {
 		if rest[0] != ' ' {
 			return nil // not hashline format
 		}
-		// Validate the prefix is hex.
 		for _, c := range prefix {
 			if !isHexChar(c) {
 				return nil
@@ -71,7 +68,6 @@ func isHexChar(c rune) bool {
 // just the first, because a re-read fixes them all at once.
 func validateHashlines(content []byte, refs []hashlineRef) error {
 	lines := splitLines(string(content))
-	// Build a map of hash → line index for fast lookup.
 	hashIndex := map[string]int{}
 	for i, l := range lines {
 		hashIndex[lineHash(l)] = i
@@ -101,13 +97,11 @@ func validateHashlines(content []byte, refs []hashlineRef) error {
 // last ref's line (inclusive).
 func applyHashlineEdit(content []byte, refs []hashlineRef, newContent string) ([]byte, error) {
 	lines := splitLines(string(content))
-	// Build hash → index map.
 	hashIndex := map[string]int{}
 	for i, l := range lines {
 		hashIndex[lineHash(l)] = i
 	}
 
-	// Collect the line indices of all refs, in order of appearance.
 	indices := make([]int, 0, len(refs))
 	for _, ref := range refs {
 		idx, ok := hashIndex[ref.Hash]
@@ -117,7 +111,6 @@ func applyHashlineEdit(content []byte, refs []hashlineRef, newContent string) ([
 		indices = append(indices, idx)
 	}
 
-	// Find the span: from the first referenced line to the last.
 	first := indices[0]
 	last := indices[0]
 	for _, idx := range indices[1:] {
@@ -129,7 +122,6 @@ func applyHashlineEdit(content []byte, refs []hashlineRef, newContent string) ([
 		}
 	}
 
-	// Replace the span with newContent lines.
 	newLines := splitLines(newContent)
 	var sb strings.Builder
 	for _, l := range lines[:first] {

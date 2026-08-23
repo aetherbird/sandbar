@@ -1,20 +1,17 @@
-// Package llm: native Anthropic Messages API wire client, ported from legacy
-// sandbar's provider layer. Speaks the Messages streaming protocol — SSE events
-// (message_start/content_block_start/content_block_delta/content_block_stop/
-// message_delta/message_stop) rather than OpenAI chunks — so Anthropic models
-// get correct tool-use blocks, native thinking deltas, split usage merge, and
-// prompt caching that the OpenAI-compat bridge degrades.
+// Package llm: native Anthropic Messages API wire client, speaking the
+// Messages SSE protocol instead of OpenAI chunks, so Anthropic models get
+// correct tool-use blocks, thinking deltas, split usage merge, and prompt
+// caching.
 //
-// The fork's lingua franca is openai.ChatCompletionMessage, so translation
-// happens at this boundary: system messages become the top-level system block;
-// assistant ToolCalls become tool_use blocks; role "tool" messages become
-// user-turn tool_result blocks (the Messages API's shape — results ride in user
-// messages, not a "tool" role). Consecutive same-role messages merge (the API
-// requires alternating roles), and an assistant-first conversation gets a
-// "(continue)" user preamble. Prompt-caching breakpoints (cache_control:
-// ephemeral) go on the system block and the last content block of the final
-// user turn — the rolling breakpoint, so turn N+1's request extends turn N's
-// cached prefix instead of invalidating it.
+// The fork's lingua franca is openai.ChatCompletionMessage; translation
+// happens at this boundary: system becomes the top-level system block,
+// assistant ToolCalls become tool_use blocks, and role "tool" messages become
+// user-turn tool_result blocks (the Messages shape). Consecutive same-role
+// messages merge because the API requires alternating roles, and an
+// assistant-first conversation gets a "(continue)" preamble. Prompt-caching
+// breakpoints ride the system block and the last content block of the final
+// user turn — the rolling breakpoint, so turn N+1 extends turn N's cached
+// prefix.
 
 package llm
 
@@ -75,8 +72,6 @@ func newAnthropicClient(resolved ResolvedModel) *anthropicClient {
 		maxTokens: resolved.MaxTokens,
 	}
 }
-
-// compile-time seam check lives in wire.go.
 
 // Chat streams a Messages call.
 func (c *anthropicClient) Chat(ctx context.Context, messages []openai.ChatCompletionMessage) (<-chan StreamEvent, error) {
@@ -607,7 +602,6 @@ func (c *anthropicClient) parseStream(ctx context.Context, body io.ReadCloser, c
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64*1024), anthropicScanMax)
 
-	// Per-index block state.
 	type blockState struct {
 		kind    string // "text" | "tool_use" | "thinking"
 		id      string // tool_use id

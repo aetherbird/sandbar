@@ -93,7 +93,6 @@ func (a *Agent) lockThread(ctx context.Context, threadID string) (func(), error)
 	}
 }
 
-// New creates a new Agent.
 func New(cfg *config.Config, store *memory.Store, registry *llm.Registry, toolReg *tools.Registry) *Agent {
 	a := &Agent{
 		cfg:      cfg,
@@ -102,8 +101,7 @@ func New(cfg *config.Config, store *memory.Store, registry *llm.Registry, toolRe
 		tools:    toolReg,
 		steering: newSteeringQueues(),
 	}
-	// Register this agent as the subagent runner so delegate_task can spawn sub-agents.
-	// Stored on the tool registry instance, not a package global.
+	// Register as the subagent runner on the registry instance, not a package global.
 	if a.tools != nil {
 		a.tools.SetSubagentRunner(a)
 		a.tools.SetPlanStore(store)
@@ -166,7 +164,6 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 
 	client := llm.NewWireClient(resolved)
 
-	// Create a restricted tool registry for the sub-agent.
 	allowedTools := a.cfg.Subagent.Tools
 	if len(allowedTools) == 0 {
 		allowedTools = []string{"file_read", "search_files", "web_search", "web_fetch", "shell_exec"}
@@ -185,11 +182,11 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 	filteredTools.Clear()
 	if a.tools != nil {
 		approvalConfig := a.tools.ApprovalConfig()
-		// Approval of delegate_task is the subagent's broad execution boundary.
-		// Preserve explicit tool/tier deny rules, but do not repeatedly apply the
-		// parent mode default inside the approved delegated run. Prompt policies
-		// are unanswerable here (no handler is installed in a subagent), so they
-		// degrade to allow; deny stays deny.
+		// delegate_task approval is the subagent's broad execution boundary.
+		// Keep explicit deny rules but don't re-apply the parent mode default
+		// inside the delegated run. Prompt policies are unanswerable here (no
+		// handler is installed in a subagent), so they degrade to allow;
+		// deny stays deny.
 		approvalConfig.Mode = tools.ApprovalModeYolo
 		approvalConfig = tools.RewritePromptToAllow(approvalConfig)
 		_ = filteredTools.SetApprovalConfig(approvalConfig)
@@ -205,7 +202,7 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 		})
 	}
 	// Adopt the parent's job supervisor so DeleteThread's CancelThreadJobs
-	// reaches shell work this subagent starts (the fresh registry otherwise owns
+	// reaches shell work this subagent starts (a fresh registry would own
 	// an unreachable supervisor of its own).
 	if a.tools != nil {
 		if parentJobs := a.tools.JobSupervisor(); parentJobs != nil {
@@ -225,11 +222,10 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 		}
 	}
 
-	// Build isolated messages after filtering so the prompt advertises exactly
-	// the tools the sub-agent can actually call. The sub-agent cannot see the
-	// parent conversation, so the prompt tells it the goal is self-contained
-	// and carries every requirement (mirrors the delegation guidance we give
-	// the parent model in the system prompt).
+	// Build messages after filtering so the prompt advertises exactly the
+	// tools the sub-agent can call. It cannot see the parent conversation,
+	// so the prompt says the goal is self-contained (mirrors the delegation
+	// guidance in the parent system prompt).
 	sysPrompt := fmt.Sprintf("You are an autonomous sub-agent completing a delegated goal. You do not see the parent conversation: the goal below is self-contained and carries all requirements. Use the available tools to investigate and act — you have shell_exec, so you can run commands, build, and test, not just read. Ground every claim in tool output. Keep going until the task is complete; never give up due to missing information that tools or files can provide. For long waits use the job tool (start with async, then job wait); never poll with `sleep N; …` loops. Return a clear, structured summary of what you did, what you found, and anything you could not verify.\n\nWorkspace: %s\nCurrent date: %s\nAvailable tools: %s.", workspace, time.Now().UTC().Format("2006-01-02"), strings.Join(filteredTools.List(), ", "))
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: sysPrompt},
@@ -256,15 +252,16 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 	}
 
 	// Buffered so a slow parent cannot stall the sub-agent on every event; the
-	// ctx.Done guard on each send keeps a stuck parent from leaking the goroutine.
+	// ctx.Done guard on each send prevents a stuck parent from leaking the
+	// goroutine.
 	ch := make(chan tools.SubagentEvent, 64)
 
 	go func() {
 		defer close(ch)
 
-		// partial accumulates the assistant text emitted as token events, so a
-		// terminal error can carry the work produced before the run ended. On
-		// normal completion it is exactly what the "done" event carries.
+		// partial accumulates assistant text so a terminal error can carry the
+		// work produced before the run ended; on normal completion it is what
+		// the "done" event carries.
 		var partial strings.Builder
 		ft := newFileTracker()
 		send := func(ev tools.SubagentEvent) bool {
@@ -281,8 +278,7 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 		}
 		turn := 0
 		var loopGuard toolLoopGuard
-		// Inherit the parent turn's reasoning effort so the subagent's provider
-		// calls use the same effort the user selected.
+		// Inherit the parent turn's reasoning effort.
 		effort := tools.EffortFromContext(ctx)
 		sendError := func(content string, err error) {
 			partialWithManifest := partial.String()
@@ -291,7 +287,6 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 			}
 			errorPartial := sanitizeSubagentOutput(partialWithManifest)
 			send(tools.SubagentEvent{Type: "error", Content: content, Partial: errorPartial, Err: err})
-			// Persist task state if we have a task_id.
 			if persistTask {
 				status := "failed"
 				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -317,10 +312,9 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 			}
 			result = sanitizeSubagentOutput(result)
 			sent := send(tools.SubagentEvent{Type: "done", Content: result})
-			// Persist completed state if we have a task_id. The write is NOT gated
-			// on sent: when the parent cancels, ch<-ev and <-ctx.Done() are both
-			// ready and Go may pick the cancel branch even though the event
-			// actually delivered — skipping the UPDATE would leave status
+			// The write is NOT gated on sent: when the parent cancels, ch<-ev and
+			// <-ctx.Done() are both ready and Go may pick the cancel branch even
+			// though the event delivered — skipping the UPDATE would leave status
 			// 'running' and make a later resume re-execute completed work.
 			if persistTask {
 				messagesJSON, _ := json.Marshal(messages)
@@ -366,7 +360,6 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 
 				if len(result.ToolCalls) > 0 {
 					loopDecision := loopGuard.Observe(result.ToolCalls)
-					// Append assistant message with tool calls.
 					messages = append(messages, openai.ChatCompletionMessage{
 						Role:      openai.ChatMessageRoleAssistant,
 						Content:   result.Content,
@@ -398,9 +391,8 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 							args = make(map[string]interface{})
 						}
 						callCtx = tools.WithToolCallID(callCtx, tc.ID)
-
-						// Track file operations for the subagent file manifest.
 						ft.trackFileOp(tc.Function.Name, args)
+
 						if tc.Function.Name == "shell_exec" {
 							if cmd, _ := args["command"].(string); cmd != "" {
 								ft.trackShellCmd(cmd)
@@ -444,10 +436,9 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 				}
 
 				// A completion without tool calls is the terminal response from
-				// this same tools-enabled request. Do not discard it and issue a
-				// second request without schemas: models may try to call a tool in
-				// that second response, but the provider can no longer return a
-				// native structured tool call.
+				// this same tools-enabled request. Discarding it and issuing a
+				// second, schemaless request would let the model call tools the
+				// provider can no longer return natively.
 				if result.Content != "" {
 					if !sendToken(result.Content) {
 						return
@@ -579,8 +570,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		return "", fmt.Errorf("resolve model: %w", err)
 	}
 
-	// Create or load thread. New threads record the workspace their tools run
-	// in so resume can tell which directory a conversation belongs to.
+	// New threads record their workspace so resume knows where a conversation belongs.
 	var thread *memory.Thread
 	var unlock func()
 	if req.ThreadID == "" {
@@ -593,8 +583,8 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 			return thread.ID, fmt.Errorf("lock new thread: %w", err)
 		}
 	} else {
-		// Acquire the lifecycle lock before loading an existing thread so a
-		// concurrent delete cannot remove it between load and turn execution.
+		// Lock before loading so a concurrent delete cannot remove the thread
+		// between load and turn execution.
 		unlock, err = a.lockThread(ctx, req.ThreadID)
 		if err != nil {
 			return "", fmt.Errorf("wait for active thread turn: %w", err)
@@ -610,7 +600,6 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 	// resend, parallel HTTP requests) must not interleave history writes
 	// between an assistant tool-call group and its tool results.
 	defer unlock()
-
 	// Register this turn with the steering queue so mid-turn messages can be
 	// queued (and later injected at a tool boundary) and interrupted. The
 	// endSteeringTurn defer is registered after unlock so it runs first (LIFO),
@@ -618,10 +607,9 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 	a.beginTurn(thread.ID)
 	defer a.endSteeringTurn(thread.ID)
 
-	// Plan-mode lifecycle: a plan turn marks the thread 'planning' at turn
-	// start (and 'pending_approval' on successful completion, at the terminal
-	// returns below). A normal turn abandons an unfinished plan decision so a
-	// stale pending state can never fire late on an unrelated thread.
+	// Plan-mode lifecycle: a plan turn marks the thread 'planning' at start
+	// (and 'pending_approval' on success, below). A normal turn abandons an
+	// unfinished plan decision so a stale pending state can never fire late.
 	if req.PlanOnly {
 		if err := a.store.SetThreadPlanMode(thread.ID, memory.PlanModePlanning); err != nil {
 			return thread.ID, fmt.Errorf("mark plan turn: %w", err)
@@ -634,23 +622,20 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		thread.PlanMode = memory.PlanModeOff
 	}
 
-	// Append user message.
 	userContent := req.UserMessage
 	if _, err := a.store.AppendMessage(thread.ID, "user", &userContent, nil); err != nil {
 		return "", fmt.Errorf("persist user message: %w", err)
 	}
 
-	// Announce the thread identity immediately, before any provider call. An
-	// interrupted turn must still tell its caller which thread it created or
-	// resumed: the terminal "done" event — the only other ThreadID carrier —
-	// is never emitted by a cancelled turn, and without this announcement a
-	// session whose first turn was interrupted keeps "" as its thread ID, so
-	// the next message silently starts a brand-new conversation.
+	// Announce the thread identity before any provider call: the terminal
+	// "done" event — the only other ThreadID carrier — is never emitted by a
+	// cancelled turn, and a session whose first turn was interrupted would
+	// otherwise keep "" as its thread ID and silently start a new thread next.
 	if err := onEvent(llm.StreamEvent{Type: "thread", ThreadID: thread.ID}); err != nil {
 		return thread.ID, err
 	}
 
-	// Build LLM message history (returns indexed metadata; no truncation inside).
+	// Build LLM message history.
 	indexedMsgs, err := a.buildMessages(thread.ID, req.Workspace, req.Source, req.PlanOnly)
 	if err != nil {
 		return thread.ID, fmt.Errorf("build messages: %w", err)
@@ -659,8 +644,6 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		comp := a.compressIfNeeded(ctx, thread.ID, indexedMsgs, req.ModelAlias, resolved.ContextLength, CompressionModeTurnStart)
 		indexedMsgs = comp.Messages
 		if comp.Outcome != CompressionOutcomeNone {
-			// Emit compression_start then compression_end/error only when
-			// something actually happened (not a no-op under budget).
 			_ = onEvent(llm.StreamEvent{
 				Type:        "compression_start",
 				Compression: buildCompressionStartEvent(comp, comp.BudgetTokens),
@@ -724,13 +707,12 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 	if req.PlanOnly {
 		ctx = tools.WithPlanMode(ctx)
 	}
-	// Carry the turn's effort through tool execution so subagents inherit it
-	// instead of falling back to the provider's default.
+	// Carry the turn's effort so subagents inherit it instead of the provider default.
 	ctx = tools.WithEffort(ctx, effort)
 	turn := 0
 	var loopGuard toolLoopGuard
-	// Mid-turn todo nudge state: counts consecutive tool-call rounds that never
-	// touch the todo tool; the nudge itself fires at most once per turn.
+	// Counts consecutive tool-call rounds that never touch the todo tool; the
+	// nudge itself fires at most once per turn.
 	toolRoundsWithoutTodo := 0
 	todoNudgeSent := false
 	for {
@@ -738,19 +720,19 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 			return thread.ID, onEvent(llm.StreamEvent{Type: "error", Content: "max turn limit reached"})
 		}
 		turn++
-		// Re-render from indexed state each turn. This preserves database sequence
+		// Re-render from indexed state each turn to preserve database sequence
 		// metadata and transient active-turn checkpoints across repeated tool loops.
 		llmMessages = toRawMessages(indexedMsgs)
-		// Repair any residual poison (interrupted turns, crash residue) before
-		// the payload leaves the process; the validator stays on as a hard
-		// assertion afterwards.
+		// Repair residual poison (interrupted turns, crash residue) before the
+		// payload leaves the process; the validator stays on as a hard assertion.
 		llmMessages = sanitizeProviderMessages(llmMessages)
 		if err := validateProviderPayload(llmMessages); err != nil {
 			return thread.ID, fmt.Errorf("invalid provider payload: %w", err)
 		}
 
 		if resolved.SupportsTools && a.tools != nil {
-			// First turn with tool-capable model: use non-streaming to detect tool calls.
+			// Tool-capable models use non-streaming Complete so a single response
+			// can carry either native tool calls or terminal text.
 			openaiTools := a.buildToolSchemas()
 			var result *llm.CompletionResult
 			err := runWithLLMRetry(ctx, onEvent, func() error {
@@ -763,7 +745,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 			}
 
 			// Emit usage per tool-loop call so the context gauge updates live as
-			// the agent reads files and grows context (not just once at the end).
+			// the agent grows context, not just once at the end.
 			if result.Usage.TotalTokens > 0 {
 				_ = onEvent(llm.StreamEvent{
 					Type:             "usage",
@@ -786,7 +768,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 				if err := validateNewToolCallGroup(indexedMsgs, result.Content, result.ToolCalls); err != nil {
 					return thread.ID, fmt.Errorf("provider returned invalid tool-call group: %w", err)
 				}
-				// Persist assistant turn with tool calls.
+				// Persist the assistant turn.
 				assistantMsg, err := a.persistAssistantTurn(thread.ID, result.Content, result.ToolCalls)
 				if err != nil {
 					return thread.ID, fmt.Errorf("persist assistant turn: %w", err)
@@ -804,7 +786,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 				})
 
 				// Once the assistant tool-call group is durable, every call must also
-				// receive a durable tool result. Otherwise a cancelled request poisons
+				// receive a durable tool result; otherwise a cancelled request poisons
 				// the next resumed provider payload with an incomplete group.
 				closePending := func(start int, cause error) error {
 					if _, closeErr := a.persistInterruptedToolResults(thread.ID, result.ToolCalls[start:]); closeErr != nil {
@@ -814,8 +796,8 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 				}
 
 				// Announce the complete provider-ordered batch before execution. The
-				// coordinator may run a fully independent batch concurrently, but
-				// results are still emitted and persisted in this original order.
+				// coordinator may run an independent batch concurrently, but results
+				// are still emitted and persisted in this original order.
 				if err := onEvent(llm.StreamEvent{Type: "intermediate", Content: "Processing..."}); err != nil {
 					return thread.ID, closePending(0, err)
 				}
@@ -869,7 +851,6 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 						return thread.ID, closePending(toolIndex, err)
 					}
 
-					// Append tool result to DB and in-memory history.
 					toolMsg, err := a.store.AppendMessage(thread.ID, "tool", &output, &tc.ID)
 					if err != nil {
 						persistErr := fmt.Errorf("persist tool result: %w", err)
@@ -892,9 +873,9 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 				}
 
 				// Track consecutive tool-call rounds that never touch the todo
-				// tool. After enough of them — and only when the thread actually
-				// has a durable task list — remind the model once per turn to
-				// keep that list current. Synthetic and never persisted.
+				// tool. After enough of them — and only when the thread has a
+				// durable task list — remind the model once per turn to keep
+				// that list current. Synthetic and never persisted.
 				todoTouched := false
 				for _, tc := range result.ToolCalls {
 					if tc.Function.Name == "todo" {
@@ -959,10 +940,9 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 					}
 				}
 
-				// Drain any queued steering messages at this tool boundary. This
-				// runs AFTER the compression block so a mid-turn message becomes
-				// the latest user turn rather than being swallowed by a mid-loop
-				// compression.
+				// Drain queued steering messages at this tool boundary — after the
+				// compression block, so a mid-turn message becomes the latest user
+				// turn rather than being swallowed by a mid-loop compression.
 				drained, drainErr := a.drainSteering(thread.ID, onEvent)
 				if drainErr != nil {
 					return thread.ID, drainErr
@@ -972,7 +952,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 					llmMessages = toRawMessages(indexedMsgs)
 				}
 
-				continue // Loop back to LLM with in-memory llmMessages intact.
+				continue // Loop back to the LLM with the in-memory view intact.
 			}
 
 			// No tool calls means result.Content is the terminal response from
@@ -1066,7 +1046,6 @@ func (a *Agent) streamAndPersist(ctx context.Context, client llm.WireClient, thr
 	// streaming instead of using native OpenAI tool_calls. If found,
 	// execute the tools and return — the caller will loop back if needed.
 	if tcs := parseTextToolCalls(content); len(tcs) > 0 {
-		// Persist the assistant turn with the parsed tool calls.
 		if _, err := a.persistAssistantTurn(threadID, content, tcs); err != nil {
 			return fmt.Errorf("persist assistant turn: %w", err)
 		}
@@ -1120,16 +1099,15 @@ func (a *Agent) streamAndPersist(ctx context.Context, client llm.WireClient, thr
 			return fmt.Errorf("persist assistant message: %w", err)
 		}
 	}
-	// Carry the thread id in the dedicated ThreadID field (canonical schema);
-	// Content is kept set to the same value for backward-compatible consumers.
+	// ThreadID is the canonical schema field; Content mirrors it for
+	// backward-compatible consumers.
 	return onEvent(llm.StreamEvent{Type: "done", ThreadID: threadID, Content: threadID})
 }
 
-// emitAndPersistCompletion finalizes a non-streaming (or internally assembled
-// streaming-fallback) completion. Tool-capable turns use Client.Complete so a
-// single provider response can contain either native tool calls or terminal
-// text. Emitting the complete text as one token event keeps the public event
-// contract consistent without making another model request.
+// emitAndPersistCompletion finalizes a non-streaming completion. Tool-capable
+// turns use Client.Complete so one provider response can carry native tool
+// calls or terminal text; emitting the text as one token event keeps the
+// public event contract without another model request.
 func (a *Agent) emitAndPersistCompletion(threadID, content string, onEvent func(llm.StreamEvent) error) error {
 	if content != "" {
 		if err := onEvent(llm.StreamEvent{Type: "token", Content: content}); err != nil {
@@ -1171,11 +1149,11 @@ func validateNewToolCallGroup(history []indexedMessage, content string, toolCall
 	return validateProviderPayload(candidate)
 }
 
-// persistInterruptedToolResults closes every still-pending call in a durable
-// assistant tool-call group. Provider APIs require an immediately following
-// result for every call ID, so returning from Chat without these records would
-// make the thread impossible to resume safely. It returns the persisted
-// messages so callers can mirror them into an in-memory view.
+// persistInterruptedToolResults seals every still-pending call in a durable
+// assistant tool-call group. Providers require an immediately following result
+// for every call ID, so returning without these records would make the thread
+// impossible to resume safely. Returns the persisted messages so callers can
+// mirror them into an in-memory view.
 func (a *Agent) persistInterruptedToolResults(threadID string, pending []openai.ToolCall) ([]memory.Message, error) {
 	var persisted []memory.Message
 	for _, tc := range pending {
@@ -1198,9 +1176,9 @@ func (a *Agent) executeTool(ctx context.Context, name, arguments, workspace stri
 	if args == nil {
 		args = make(map[string]interface{})
 	}
-	// A workspace included in model-generated arguments is untrusted. Carry the
-	// request-selected workspace only through context so tools cannot escape the
-	// server/CLI boundary even if schema validation is bypassed upstream.
+	// Model-generated workspace arguments are untrusted; carry the
+	// request-selected workspace through context only, so tools cannot escape
+	// the server/CLI boundary even if schema validation is bypassed upstream.
 	delete(args, "workspace")
 	if workspace != "" {
 		ctx = tools.WithWorkspace(ctx, workspace)
@@ -1232,17 +1210,16 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 		return nil, fmt.Errorf("load thread messages: %w", err)
 	}
 
-	// The system prompt is the persona plus a runtime environment block; the
-	// active model (for the environment block and model-family guidance) comes
-	// from the thread when one is recorded.
+	// System prompt = persona + runtime environment block; the active model
+	// comes from the thread when one is recorded.
 	model := ""
 	if thread != nil && thread.Model != nil {
 		model = *thread.Model
 	}
 	// Prompt-file layering (persona/promptfiles.go): SYSTEM.md replaces the
-	// configured base persona only — the environment block, project context,
-	// and skills are still assembled around it; APPEND_SYSTEM.md is appended
-	// after the assembled prompt. Discovery is project-first over user scope.
+	// configured base persona only — environment block, project context, and
+	// skills are still assembled around it; APPEND_SYSTEM.md is appended after.
+	// Discovery is project-first over user scope.
 	promptFiles := persona.DiscoverPromptFiles(workspace, persona.UserConfigDir())
 	basePrompt := a.cfg.Persona.SystemPrompt
 	if promptFiles.System != "" {
@@ -1281,9 +1258,9 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 		},
 	}
 
-	// An approved plan gets exactly one execution directive on the turn right
-	// after approval; clearing the persisted state here keeps it one-shot.
-	// Synthetic and never persisted, like the system message itself.
+	// An approved plan gets exactly one execution directive on the turn after
+	// approval; clearing the persisted state here keeps it one-shot. Synthetic
+	// and never persisted, like the system message itself.
 	if thread != nil && thread.PlanMode == memory.PlanModeApproved {
 		content := planApprovedPrompt
 		if a.store != nil {
@@ -1304,9 +1281,8 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 	}
 
 	// Re-inject the durable task list at turn start as a synthetic reminder
-	// right after the system prompt. Long threads — especially ones whose
-	// early turns were compressed away — otherwise lose sight of the plan.
-	// Like the system message itself, this block is never persisted.
+	// right after the system prompt; long threads whose early turns were
+	// compressed away otherwise lose sight of the plan. Never persisted.
 	if a.store != nil {
 		if todos, todoErr := a.store.ListTodos(threadID); todoErr == nil && len(todos) > 0 {
 			msgs = append(msgs, indexedMessage{
@@ -1341,7 +1317,6 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 		if m.ToolCallID != nil {
 			msg.ToolCallID = *m.ToolCallID
 		}
-		// Reconstruct tool calls for assistant messages from the tool_calls table.
 		if m.Role == "assistant" {
 			tcs, err := a.store.GetToolCallsForMessage(m.ID)
 			if err != nil {
@@ -1366,11 +1341,10 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 		})
 	}
 
-	// Self-heal crash residue: when the FINAL persisted message group is an
-	// assistant tool-call group missing results, the interrupted results are
-	// persisted now — they append at the end of the thread, exactly where they
-	// belong. Mid-history dangling groups are repaired in-memory only (below);
-	// persisted sequences are never rewritten.
+	// Self-heal crash residue: when the final persisted group is an assistant
+	// tool-call group missing results, the interrupted results are persisted
+	// now, appending where they belong. Mid-history dangling groups are
+	// repaired in-memory only; persisted sequences are never rewritten.
 	if missing := trailingUnansweredToolCalls(msgs); len(missing) > 0 {
 		closed, err := a.persistInterruptedToolResults(threadID, missing)
 		if err != nil {
@@ -1394,8 +1368,7 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 	}
 
 	// Repair the provider-facing view in-memory so every assistant tool-call
-	// group is sealed, orphans are dropped, and the validator downstream never
-	// sees poison from an interrupted past turn.
+	// group is sealed and the validator never sees poison from a past turn.
 	return sanitizeIndexedMessages(msgs), nil
 }
 
@@ -1463,7 +1436,6 @@ func (a *Agent) titleFromTemplate(threadID string) bool {
 
 // RegenerateTitle re-runs the LLM summarizer and unconditionally overwrites the thread title.
 func (a *Agent) RegenerateTitle(threadID, modelAlias string) {
-	// Use configured title model if set, otherwise use conversation model.
 	titleModel := a.cfg.Persona.TitleModel
 	if titleModel == "" {
 		titleModel = modelAlias
@@ -1517,7 +1489,6 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 		return nil, fmt.Errorf("store not available: cannot resume subagent task without database")
 	}
 
-	// Load the persisted task.
 	var id, goal, contextStr, modelAlias, messagesJSON, status, result string
 	var turn, maxTurns int
 	err := a.store.DB().QueryRow(
@@ -1529,10 +1500,9 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 	}
 
 	if status == "completed" {
-		// The task already finished — resuming is not an error. Hand back the
-		// stored result so the parent model gets the answer it was after
-		// instead of a failure it cannot recover from (the old behavior made
-		// models re-delegate identical work).
+		// Resuming a finished task is not an error: hand back the stored
+		// result so the parent gets the answer instead of a failure it
+		// cannot recover from (which made models re-delegate identical work).
 		ch := make(chan tools.SubagentEvent, 1)
 		content := strings.TrimSpace(result)
 		if content == "" {
@@ -1553,7 +1523,6 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 
 	client := llm.NewWireClient(resolved)
 
-	// Rebuild tool registry for the sub-agent.
 	allowedTools := a.cfg.Subagent.Tools
 	if len(allowedTools) == 0 {
 		allowedTools = []string{"file_read", "search_files", "web_search", "web_fetch", "shell_exec"}
@@ -1572,8 +1541,7 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 	filteredTools.Clear()
 	if a.tools != nil {
 		approvalConfig := a.tools.ApprovalConfig()
-		// Same as spawn: deny stays deny, but prompt policies are unanswerable
-		// without a handler and degrade to allow under the forced Yolo mode.
+		// Same as spawn: deny stays deny; prompt policies degrade to allow.
 		approvalConfig.Mode = tools.ApprovalModeYolo
 		approvalConfig = tools.RewritePromptToAllow(approvalConfig)
 		_ = filteredTools.SetApprovalConfig(approvalConfig)
@@ -1589,7 +1557,7 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 		})
 	}
 	// Adopt the parent's job supervisor so DeleteThread's CancelThreadJobs
-	// reaches shell work this subagent starts (the fresh registry otherwise owns
+	// reaches shell work this subagent starts (a fresh registry would own
 	// an unreachable supervisor of its own).
 	if a.tools != nil {
 		if parentJobs := a.tools.JobSupervisor(); parentJobs != nil {
@@ -1609,15 +1577,13 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 		}
 	}
 
-	// Deserialize saved messages.
 	var messages []openai.ChatCompletionMessage
 	if err := json.Unmarshal([]byte(messagesJSON), &messages); err != nil {
 		return nil, fmt.Errorf("deserialize subagent messages: %w", err)
 	}
 
-	// Calculate remaining turns. A zero maxTurns means unbounded (remainingTurns
-	// stays 0 and the loop runs until it returns on its own); a positive cap that
-	// is already exhausted gets a fresh defaultResumeTurns budget rather than a
+	// A zero maxTurns means unbounded (remainingTurns stays 0); a positive cap
+	// already exhausted gets a fresh defaultResumeTurns budget rather than a
 	// single throwaway turn.
 	remainingTurns := 0
 	if maxTurns > 0 {
@@ -1628,8 +1594,7 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 	}
 
 	// Guard against two concurrent resumes of the same task re-executing the
-	// same work. The guard is held for the duration of the resumed run and
-	// released when the goroutine finishes.
+	// same work; held for the duration of the resumed run.
 	a.resumeMu.Lock()
 	if a.resuming == nil {
 		a.resuming = make(map[string]bool)
@@ -1651,10 +1616,8 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 			a.resumeMu.Unlock()
 		}()
 
-		// runningTurn tracks the cumulative turn count including those from
-		// prior runs. It starts from the persisted value and advances with each
-		// completed LLM call in this resumed run. The closures persist this
-		// value so repeated resumes correctly deduct consumed budget.
+		// runningTurn is the cumulative turn count across runs, persisted on
+		// each result so repeated resumes deduct consumed budget correctly.
 		runningTurn := turn
 		ft := newFileTracker()
 		var partial strings.Builder
@@ -1702,8 +1665,8 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 			}
 			resultFinal = sanitizeSubagentOutput(resultFinal)
 			sent := send(tools.SubagentEvent{Type: "done", Content: resultFinal})
-			// Persist completed state unconditionally (see the spawn path's note):
-			// a cancelled parent may still deliver the done event but skip the
+			// Persist completed state unconditionally (see the spawn path's
+			// note): a cancelled parent may deliver the done event but skip the
 			// UPDATE, leaving status 'running' and forcing a resume to re-execute
 			// completed work.
 			messagesJSON, _ := json.Marshal(messages)
@@ -1719,8 +1682,7 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 		}
 
 		var loopGuard toolLoopGuard
-		// Inherit the parent turn's reasoning effort (set on the resume_task
-		// call's context, which originates from the parent Chat turn).
+		// Inherit the parent turn's reasoning effort via the resume_task context.
 		effort := tools.EffortFromContext(ctx)
 		for turnCount := 0; remainingTurns == 0 || turnCount < remainingTurns; turnCount++ {
 			runningTurn++

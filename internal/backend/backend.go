@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -35,22 +34,10 @@ type ThreadDetail struct {
 
 // Message is a UI-friendly message.
 type Message struct {
-	Role       string
-	Content    string
-	ToolName   string
-	ToolOutput string
-	Arguments  json.RawMessage
-	Seq        int
-	// Timing/usage — set on assistant messages when response completes
-	SentAt           time.Time // when user sent the message
-	FirstTokenAt     time.Time // when first token arrived
-	DoneAt           time.Time // when done event arrived
-	PromptTokens     int
-	CompletionTokens int
+	Role    string
+	Content string
+	Seq     int
 }
-
-// Backend streams the canonical llm.StreamEvent so every consumer of the
-// harness shares one event schema.
 
 // Backend abstracts the CLI's chat backend.
 type Backend interface {
@@ -108,7 +95,6 @@ type LocalBackend struct {
 	models []string
 }
 
-// NewLocalBackend creates a local backend.
 func NewLocalBackend(cfg *config.Config, store *memory.Store, ag *agent.Agent, models []string) *LocalBackend {
 	return &LocalBackend{cfg: cfg, store: store, agent: ag, models: models}
 }
@@ -348,7 +334,7 @@ func (b *LocalBackend) GetContextInfo(threadID string) (used, max int, err error
 	var msgs []openai.ChatCompletionMessage
 
 	// System prompt (always first). The active model comes from the thread so
-	// the environment block and model-family guidance reflect what is running.
+	// the environment block reflects what is running.
 	pp := persona.Persona{
 		Name:         b.cfg.Persona.Name,
 		SystemPrompt: b.cfg.Persona.SystemPrompt,

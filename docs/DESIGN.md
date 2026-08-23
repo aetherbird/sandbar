@@ -1,20 +1,18 @@
 # Sandbar — Design
 
-Sandbar is a standalone terminal AI coding-agent harness written in Go: a
-streaming REPL, a tiered-approval tool system, and a SQLite thread store, all
-in one local binary with no server component.
+Sandbar is a standalone terminal AI coding-agent harness in Go: a streaming
+REPL, a tiered-approval tool system, and a SQLite thread store, all in one
+local binary with no server component.
 
 ---
 
 ## 1. Vision
 
-Sandbar is a lightweight, single-user agentic harness for local and cloud
-language models. It runs entirely in your terminal: the agent reasons, plans,
-and executes tools (file, shell, git, search, web) on behalf of the user, with
-every conversation persisted locally in SQLite.
-
-Sandbar is intentionally minimal. It is not a platform, not a service, and not
-multi-user. It is one person's command center for agentic work.
+A lightweight, single-user agentic harness for local and cloud language
+models. It runs entirely in your terminal: the agent reasons, plans, and
+executes tools (file, shell, git, search, web) on your behalf, with every
+conversation persisted locally in SQLite. Not a platform, not a service, not
+multi-user.
 
 ---
 
@@ -24,7 +22,7 @@ multi-user. It is one person's command center for agentic work.
   Ollama, Gemini free-tier, OpenAI direct.
 - Provider-flexible native tool-calling: emit `tools` array for any model that
   advertises `supports_tools: true`.
-- System-permission-guided tool execution (files, shell, git, web search).
+- Tiered-approval tool execution (files, shell, git, web search).
 - Streaming responses and reasoning paths in real-time.
 - Single-binary deployment with minimal dependencies.
 - Scriptable: a stable newline-delimited JSON event stream (`--json`).
@@ -35,9 +33,7 @@ multi-user. It is one person's command center for agentic work.
 - Plugin marketplace or third-party extensions.
 - Advanced RAG / vector database.
 - Voice input.
-- A server component, web UI, or remote mode. (An earlier in-house version of
-  this harness had all three; this fork is the CLI distilled — see the lineage
-  note at the end of this document.)
+- A server component, web UI, or remote mode.
 
 ---
 
@@ -70,13 +66,11 @@ machine.
 ```
 
 **The Backend seam:** `internal/backend` defines the `Backend` interface — the
-stable contract between the CLI front end and the agent runtime. This fork
-ships exactly one implementation, `LocalBackend`, which runs the agent
-in-process against the local store and config. Optional capability interfaces
-(`ModelsProvider`, `MessageQueuer`, `TodoLister`, `PlanDecider`) are
-type-asserted by callers that need them, keeping the base interface small.
-The interface exists so alternative front ends (or a future remote mode)
-could be added without touching the REPL; none ship today.
+stable contract between the CLI front end and the agent runtime. One
+implementation ships, `LocalBackend`, which runs the agent in-process against
+the local store and config. Optional capability interfaces (`ModelsProvider`,
+`MessageQueuer`, `TodoLister`, `PlanDecider`) are type-asserted by callers
+that need them, keeping the base interface small.
 
 ---
 
@@ -157,18 +151,14 @@ sandbar/
 
 ### 7.1 LLM Client (`internal/llm`)
 
-- **Provider abstraction:** Each provider has a `base_url` and optional API key. The client constructs requests against `/v1/chat/completions`.
-- **Model resolution:** Aliases are provider-qualified (`provider/rest/of/alias`). When the first `/`-delimited segment matches a provider name, the remainder is resolved within that provider only; otherwise all providers are searched in config order and the first match wins (for the compression-model field and older thread records). `ListModels` returns every alias provider-qualified and sorted alphabetically.
-- **Tool support:** If `supports_tools: true` in config, send native `tools` array. Otherwise the agent falls back to parsing tool calls from assistant text.
-  - The config supports per-provider `model_defaults` (e.g., `supports_tools: true` inherited by all models in a provider unless overridden at the model level). The loader merges: model-level value wins over `model_defaults`, which wins over a global default of `false`.
-- **Streaming & Reasoning Parsing:** Use SSE (`stream: true`). The stream analyzer parses standard incoming text and extracts reasoning streams enclosed in `<think>...</think>` blocks.
-  - Token parser separates thinking blocks from final answers.
-  - Generates discrete streaming channels: one for raw token-by-token thinking thoughts, one for final answer tokens, and one for tool emissions.
-- **Context window:** Enforce per-model `context_length`. Token accounting uses a real BPE tokenizer (tiktoken with an offline-embedded vocabulary — no runtime HTTP fetch). Character-count division is used only as a last-resort fallback; it under-counts by 30–50% for code-heavy turns and silently overflows.
-  - Reserve a 20% headroom buffer below `context_length` for the model's response.
-  - When over budget, turn-start compression summarizes older context using an auxiliary LLM call with a configurable target ratio, min/max summary tokens, and secret redaction. The summary is persisted to SQLite and reused across turns. Group-aware boundary alignment ensures assistant `tool_calls` are never split from their corresponding `tool` results, and the latest user turn is always preserved.
-  - Mid-loop compression runs only after every tool result in the current assistant call group is complete. It first prunes oversized old tool outputs; if still over budget, it replaces completed current-turn work with one transient active-turn checkpoint while preserving the current user request byte-for-byte. Repeated compression folds the prior checkpoint and new completed work into one replacement. Raw SQLite history is retained and no transient checkpoint is persisted as a durable boundary.
-  - Fallback truncation drops whole semantic groups, never an assistant/tool-result fragment. If even the system prompt plus current user request cannot fit, the turn stops with an explicit unsafe-payload error rather than sending an oversized request. Compression triggers, summary calls and usage, applied checkpoints, fallbacks, and errors are observable; silent history loss is forbidden.
+- **Provider abstraction:** Each provider has a `base_url` and optional API key.
+- **Model resolution:** Aliases are provider-qualified (`provider/rest/of/alias`). When the first `/`-delimited segment matches a provider name, the remainder resolves within that provider only; otherwise all providers are searched in config order and the first match wins. `ListModels` returns every alias provider-qualified and sorted.
+- **Tool support:** If `supports_tools: true` in config, send native `tools` array; otherwise the agent falls back to parsing tool calls from assistant text. `model_defaults` inherit per provider; model-level values win.
+- **Streaming & Reasoning Parsing:** Use SSE (`stream: true`). The stream analyzer extracts reasoning streams enclosed in `<think>...</think>` blocks and separates them from final answer tokens.
+- **Context window:** Enforce per-model `context_length` with a real BPE tokenizer (tiktoken, offline-embedded vocabulary; chars÷4 only as a last-resort fallback). Reserve a 20% headroom buffer below `context_length` for the model's response.
+  - When over budget, turn-start compression summarizes older context with an auxiliary LLM call (configurable target ratio, min/max summary tokens, secret redaction). The summary is persisted to SQLite and reused across turns. Group-aware boundary alignment ensures assistant `tool_calls` are never split from their `tool` results, and the latest user turn is always preserved.
+  - Mid-loop compression runs only after every tool result in the current assistant call group is complete. It first prunes oversized old tool outputs; if still over budget, it replaces completed current-turn work with one transient active-turn checkpoint while preserving the current user request. Raw SQLite history is retained.
+  - Fallback truncation drops whole semantic groups, never an assistant/tool-result fragment. If even the system prompt plus current user request cannot fit, the turn stops with an explicit unsafe-payload error. Compression triggers, summaries, usage, fallbacks, and errors are all observable; silent history loss is forbidden.
 
 ### 7.2 Agent Engine (`internal/agent`)
 
@@ -226,19 +216,9 @@ parent's job supervisor so background work is torn down with the thread.
 
 ### 7.3 Tool System (`internal/tools`)
 
-All tools are defined with JSON Schema and registered in a `ToolRegistry`.
-
-**Tool Interface:**
-```go
-type Tool struct {
-    Name         string
-    Description  string
-    Schema       map[string]interface{}
-    ParallelSafe bool // handler is read-only or isolated and may share a batch
-    Metadata     ToolMetadata // approval tier + per-argument tier resolver
-    Execute      func(ctx context.Context, args map[string]interface{}) (string, error)
-}
-```
+All tools are defined with JSON Schema and registered in a `Registry` (a
+`Tool` carries Name, Description, Schema, a `ParallelSafe` flag, approval
+`Metadata`, and an `Execute` func).
 
 **Registry.Execute is the single policy and dispatch choke point.** It
 resolves effective arguments (including per-argument approval-tier
@@ -259,17 +239,9 @@ makes lost-update races between the model's view and disk impossible to commit
 silently.
 
 **Tool Result Round-Trip (OpenAI-compatible):**
-Tool results return to the model as a `role: tool` message carrying the original
-`tool_call_id` emitted by the assistant turn. The agent loop appends results in
-the exact order tools were called. Schema:
-```go
-type ToolResultMessage struct {
-    Role       string // "tool"
-    ToolCallID string // matches the assistant's tool_calls[i].id
-    Name       string // tool name
-    Content    string // stringified output (see truncation)
-}
-```
+Tool results return to the model as a `role: tool` message carrying the
+original `tool_call_id` emitted by the assistant turn. The agent loop appends
+results in the exact order tools were called.
 
 **Output Truncation Policy:**
 - Hard cap: 32 KiB per tool result (UTF-8 bytes).
@@ -327,65 +299,20 @@ host). Hosts beginning with `-` are rejected (ssh option-injection guard).
 ### 7.4 Memory (`internal/memory`)
 
 - **Thread model:** Each conversation is a `Thread` with UUID, title, creation
-  time, workspace, and message list.
-- **Message format:**
-  ```go
-  type Message struct {
-      Role       string // system | user | assistant | tool
-      Content    string
-      ToolCalls  []ToolCall
-      ToolCallID string
-      Timestamp  time.Time
-  }
-  ```
-- **Storage:** SQLite (`modernc.org/sqlite`), schema committed in `migrations/`
-  and applied in order on open. Core tables:
-  ```sql
-  CREATE TABLE threads (
-      id          TEXT PRIMARY KEY,           -- UUIDv4
-      title       TEXT,                       -- NULL until auto-title runs; user rename also sets this
-      created_at  INTEGER NOT NULL,           -- unix epoch seconds
-      updated_at  INTEGER NOT NULL,
-      model       TEXT,                       -- last model used, for resume
-      workspace   TEXT                        -- directory the thread was created in
-  );
-
-  CREATE TABLE messages (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      thread_id    TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-      role         TEXT NOT NULL,             -- system | user | assistant | tool
-      content      TEXT,                      -- NULL allowed for assistant turns that are pure tool_calls
-      tool_call_id TEXT,                      -- set when role='tool'
-      created_at   INTEGER NOT NULL,
-      seq          INTEGER NOT NULL           -- monotonic per thread for stable ordering
-  );
-  CREATE INDEX idx_messages_thread_seq ON messages(thread_id, seq);
-
-  CREATE TABLE tool_calls (
-      id          TEXT PRIMARY KEY,           -- the tool_call_id from the LLM
-      message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-      tool_name   TEXT NOT NULL,
-      arguments   TEXT NOT NULL,              -- JSON-encoded arg map
-      seq         INTEGER NOT NULL            -- order within the assistant turn
-  );
-  CREATE INDEX idx_tool_calls_message ON tool_calls(message_id);
-  ```
-  Later migrations add compressions, subagent tasks, per-thread todo plans,
-  and plan-mode state.
+  time, workspace, and message list. Messages carry a per-thread monotonic
+  `seq`; assistant tool calls live in a separate `tool_calls` table keyed by
+  the provider's call ID. Schema is committed in `migrations/` and applied in
+  order on open; later migrations add compressions, subagent tasks, per-thread
+  todo plans, and plan-mode state.
+- **Storage:** SQLite (`modernc.org/sqlite`), opened with
+  `journal_mode=WAL; synchronous=NORMAL; foreign_keys=ON; busy_timeout=5000`
+  and connection-local pragmas repeated on write connections.
 - **Full-text search:** message content is indexed into an FTS5 virtual table
   (`messages_fts`) kept in sync via triggers; `/search` runs bm25-ranked
   MATCH queries with user input sanitized for FTS5 syntax.
-- **Concurrent Access & WAL Mode:** the Go initialization pipeline explicitly
-  enforces WAL mode:
-  ```go
-  _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
-  ```
 - **Auto-title:** After the first user message + assistant response, a
-  background goroutine asks the LLM for a 5-word title. The UPDATE is
-  conditional to avoid clobbering a manual rename:
-  ```sql
-  UPDATE threads SET title = ?, updated_at = ? WHERE id = ? AND title IS NULL;
-  ```
+  background goroutine asks the LLM for a 5-word title; the UPDATE is
+  conditional (`WHERE title IS NULL`) to avoid clobbering a manual rename.
 - **Fork:** `/fork` copies a thread (messages, tool calls with remapped IDs
   and result references, plans) into a new thread ID inside one transaction,
   rolling back completely if any step fails. The source thread is untouched.
@@ -461,21 +388,21 @@ type StreamEvent struct {
 sandbar [flags] [message]
 
 Flags:
-  --model, -m              Model alias (default: client.yaml default_model, else config order)
-  --workspace, -w          Workspace directory (default: ./workspace)
-  --config, -c             Config path (default: search path, see §11)
-  --thread, -t             Resume thread by ID (--resume is an alias)
-  --json                   Emit newline-delimited JSON events (scripting/benchmarking)
-  --summarize-context      Summarize a JSON message batch from stdin without
-                           running an agent turn (requires --json and --model)
-  --plan                   Plan mode: read-only investigation; present a plan
-                           instead of changing anything
-  --effort                 Reasoning effort for this run: low, medium, or high
-  --tools                  Restrict this run to these tools, comma-separated;
-                           the rest are not advertised to the model
-  --disable-subagents      Omit delegate_task and resume_task entirely
-  --theme / --list-themes  CLI theme override / list theme IDs
-  --color                  Color output: auto, always, or never
+  --model                 Model alias (default: client.yaml default_model, else first available)
+  --workspace             Workspace directory (default: current directory)
+  --config                Config path (default: search path, see §11)
+  --thread                Resume thread by ID (--resume is an alias)
+  --json                  Emit newline-delimited JSON events (scripting/benchmarking)
+  --summarize-context     Summarize a JSON message batch from stdin without
+                          running an agent turn (requires --json and --model)
+  --plan                  Plan mode: read-only investigation; present a plan
+                          instead of changing anything
+  --effort                Reasoning effort for this run: low, medium, or high
+  --tools                 Restrict this run to these tools, comma-separated;
+                          the rest are not advertised to the model
+  --disable-subagents     Omit delegate_task and resume_task entirely
+  --theme / --list-themes CLI theme override / list theme IDs
+  --color                 Color output: auto, always, or never
 
 Admin subcommands (before flag parsing):
   sandbar doctor | config | completion …
@@ -492,7 +419,7 @@ Admin subcommands (before flag parsing):
   ```bash
   cat source_code.go | sandbar "Summarize this logic block"
   ```
-  Stdin detection uses Go stdlib: `fi, _ := os.Stdin.Stat(); piped := (fi.Mode() & os.ModeCharDevice) == 0`. No cgo / isatty dependency. When `piped` is true, the full stdin buffer is read and appended to the user message before the agent loop fires (separator: two newlines + a fenced code block).
+  Stdin detection uses `os.Stdin.Stat()` (no cgo/isatty dependency). When piped, the full stdin buffer is appended to the user message (separator: two newlines + a fenced code block).
 
 **Themes:** palettes include light, dark, monochrome, Catppuccin Latte/Mocha,
 Tokyo Night (and variants), Rosé Pine (and variants), Gruvbox, Dracula, One
@@ -587,16 +514,16 @@ tools:
     blocked_commands:
       - "rm -rf /"
       - "chmod 777"
-  ssh:
-    connect_timeout: 5s   # ssh -o ConnectTimeout for the host argument
-    batch_mode: true      # ssh -o BatchMode=yes (no interactive prompts)
-    allowed_hosts: []     # empty = any host; else exact allowlist
     jobs:
       max_jobs: 128
       max_running: 16
       output_bytes: 65536
       retention: "30m"
       termination_grace: "750ms"
+  ssh:
+    connect_timeout: 5s   # ssh -o ConnectTimeout for the host argument
+    batch_mode: true      # ssh -o BatchMode=yes (no interactive prompts)
+    allowed_hosts: []     # empty = any host; else exact allowlist
   web_search:
     engine: "brave"     # primary; falls back to DuckDuckGo HTML scrape if
     brave_api_key: ""   #   the Brave key is empty/unreachable
@@ -654,23 +581,23 @@ machine, point it at providers, work.
 
 ## 13. Finalized Decisions
 
-1. **CLI Stdin Piping:** Enforced functionality. The one-shot mode checks for a readable terminal pipe via `os.Stdin.Stat()` (no cgo isatty) and appends content dynamically.
-2. **Thinking Mode Rendering:** Confirmed. Raw `<think>` chunks are dynamically parsed, streamed, and rendered in a distinct low-contrast section in the REPL.
-3. **Git Operations:** Built entirely around robust native `git` CLI executable wrappers using Go's `os/exec` instead of `go-git`. Toolset covers status, diff, add, commit — staging is explicit, no blanket `git add .`.
-4. **ReAct Parallel execution:** Enabled only for all-independent batches via explicit tool metadata, with at most eight workers. Side-effecting and mixed batches remain sequential; result emission and persistence always follow provider order.
-5. **SQLite Journal Mode:** Hardcoded WAL + `synchronous=NORMAL` + `foreign_keys=ON` initialization pragmas. Schema committed in `migrations/` and applied in order on open.
-6. **Tool Result Round-Trip:** Standard OpenAI `role: tool` messages with `tool_call_id` linkage. 32 KiB hard cap per result (16 KiB each for shell stdout/stderr). Binary output is suppressed rather than JSON-corrupting.
-7. **SHA-256 Write Preconditions:** All mutating file tools require the digest observed at last read; conflicting writes fail loudly instead of lost-update-corrupting.
-8. **Token Accounting:** Real BPE tokenizer with an offline-embedded vocabulary (no character/4 approximation as the primary path). 20% headroom buffer. Turn-start summarization-based compression runs before fallback truncation; group-aware boundaries preserve valid tool-call sequences and the latest user turn. Mid-loop compression prunes old tool outputs, then creates a transient split-turn checkpoint only from complete assistant/tool groups when needed. Silent history loss is forbidden.
-9. **Web Search Priority:** Brave Search API is primary; DuckDuckGo HTML scrape is fallback only.
-10. **Content Search:** ripgrep when present, pure-Go walker otherwise — the tool's contract never depends on a binary being installed.
-11. **SQLite Driver Lock-in:** `modernc.org/sqlite` only. Swapping to CGO drivers (`mattn/go-sqlite3`) is forbidden — it breaks static cross-compile.
+1. **CLI stdin piping:** one-shot mode detects a pipe via `os.Stdin.Stat()` and appends stdin to the message.
+2. **Thinking rendering:** raw `<think>` chunks are parsed, streamed, and rendered in a distinct low-contrast section.
+3. **Git operations:** native `git` CLI via `os/exec` (no go-git); explicit staging, no blanket `git add .`.
+4. **Parallel execution:** only all-independent batches via explicit tool metadata, max eight workers; result emission and persistence always follow provider order.
+5. **SQLite:** WAL + `synchronous=NORMAL` + `foreign_keys=ON`; schema in `migrations/`, applied in order.
+6. **Tool results:** OpenAI `role: tool` round-trip; 32 KiB hard cap per result (16 KiB each for shell stdout/stderr); binary output suppressed.
+7. **SHA-256 write preconditions:** mutating file tools require the digest observed at last read; conflicts fail loudly.
+8. **Token accounting:** real BPE tokenizer (offline vocabulary); 20% headroom; group-safe compression; silent history loss forbidden.
+9. **Web search:** Brave API primary, DuckDuckGo HTML fallback.
+10. **Content search:** ripgrep when present, pure-Go walker otherwise.
+11. **SQLite driver:** `modernc.org/sqlite` only — CGO drivers break static cross-compile.
 
 ---
 
 ## Lineage
 
-Sandbar is a public fork of an in-house harness ("mariana") that also carried
-a web SPA, a multi-host server deployment, and a remote CLI mode. This fork
-removes all of that: what remains is the local CLI, its tool system, and the
-design decisions documented here.
+Sandbar is a public fork of an in-house harness that also carried a web SPA,
+a multi-host server deployment, and a remote CLI mode. This fork removes all
+of that: what remains is the local CLI, its tool system, and the design
+decisions documented here.

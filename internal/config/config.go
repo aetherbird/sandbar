@@ -63,11 +63,9 @@ type ProviderConfig struct {
 	APIKey        string                 `yaml:"api_key"`
 	Models        map[string]ModelConfig `yaml:"models"`
 	ModelDefaults ModelConfig            `yaml:"model_defaults"`
-	// API selects the wire protocol: "" (default) means OpenAI-compatible
-	// chat completions — the only client implemented today; legacy's
-	// explicit "openai-completions" is accepted as the same thing;
-	// "anthropic-messages" is recognized and validated, with its native wire
-	// client landing in a follow-up.
+	// API selects the wire protocol: "" / "openai-completions" means
+	// OpenAI-compatible chat completions; "anthropic-messages" uses the native
+	// Messages client (internal/llm/anthropic.go).
 	API string `yaml:"api,omitempty" json:"api,omitempty"`
 	// Compat carries optional per-provider quirks (models.json heritage).
 	// Nil means defaults; see CompatFlags.
@@ -198,7 +196,6 @@ func finalizeConfig(data []byte, configDir string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	// Apply defaults.
 	if cfg.Workspace == "" {
 		cfg.Workspace = "./workspace"
 	}
@@ -343,7 +340,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Provider name uniqueness.
 	providerNames := make(map[string]bool)
 	for _, p := range c.Providers {
 		if p.Name == "" {
@@ -370,7 +366,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Compression config validation.
 	if c.Compression.Enabled {
 		if c.Compression.Threshold <= 0 || c.Compression.Threshold >= 1 {
 			return fmt.Errorf("compression threshold must be between 0 and 1 (exclusive), got %v", c.Compression.Threshold)

@@ -197,7 +197,6 @@ func (c *Client) Complete(ctx context.Context, messages []openai.ChatCompletionM
 func (c *Client) CompleteWithOptions(ctx context.Context, messages []openai.ChatCompletionMessage, opts CompleteOptions) (*CompletionResult, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, completionAttemptTimeout)
 	defer cancel()
-	// Try non-streaming first — works for most models including Gemma.
 	result, err := c.completeNonStreaming(attemptCtx, messages, opts)
 	if err == nil {
 		return result, nil
@@ -205,7 +204,6 @@ func (c *Client) CompleteWithOptions(ctx context.Context, messages []openai.Chat
 	if !IsFallbackWorthy(err) {
 		return nil, err
 	}
-	// Fall back to streaming for providers that require it.
 	return c.completeStreaming(ctx, messages, opts)
 }
 
@@ -347,7 +345,6 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 	// reasoning accumulates reasoning_content deltas (thinking models) so a
 	// terminal think-stop can be distinguished from a true empty response.
 	var reasoning string
-	// Track tool call deltas by index.
 	toolCallParts := make(map[int]*openai.ToolCall)
 	var usage CompletionUsage
 
@@ -364,7 +361,7 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 			return nil, fmt.Errorf("complete: %w", err)
 		}
 
-		// Capture usage from final chunk.
+		// Capture usage from the final chunk.
 		if resp.Usage != nil {
 			if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 || resp.Usage.TotalTokens > 0 {
 				usage = CompletionUsage{
@@ -385,7 +382,6 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 		// answer/tool call) can be reported truthfully at the end.
 		reasoning += delta.ReasoningContent
 
-		// Assemble tool calls from deltas.
 		for _, tc := range delta.ToolCalls {
 			idx := 0
 			if tc.Index != nil {
@@ -416,7 +412,6 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 		}
 	}
 
-	// Collect assembled tool calls in index order.
 	for i := 0; i < len(toolCallParts); i++ {
 		if tc, ok := toolCallParts[i]; ok {
 			toolCalls = append(toolCalls, *tc)
@@ -438,12 +433,10 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 	}, nil
 }
 
-// Chat streams a chat completion and returns a channel of events.
 func (c *Client) Chat(ctx context.Context, messages []openai.ChatCompletionMessage) (<-chan StreamEvent, error) {
 	return c.ChatWithOptions(ctx, messages, ChatOptions{})
 }
 
-// ChatWithOptions streams a chat completion with optional reasoning effort.
 func (c *Client) ChatWithOptions(ctx context.Context, messages []openai.ChatCompletionMessage, opts ChatOptions) (<-chan StreamEvent, error) {
 	req := openai.ChatCompletionRequest{
 		Model:    c.model,
@@ -489,7 +482,7 @@ func (c *Client) ChatWithOptions(ctx context.Context, messages []openai.ChatComp
 				return
 			}
 
-			// Check for usage data (sent in final chunk when include_usage is true).
+			// Usage data arrives in the final chunk when include_usage is true.
 			if resp.Usage != nil && (resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 || resp.Usage.TotalTokens > 0) {
 				select {
 				case ch <- StreamEvent{

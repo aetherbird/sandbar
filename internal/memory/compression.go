@@ -142,7 +142,6 @@ func (s *Store) InvalidateCompressionsAfterSeq(threadID string, seq int) error {
 	return nil
 }
 
-// boolToInt converts a bool to an integer for SQLite storage.
 func boolToInt(b bool) int {
 	if b {
 		return 1

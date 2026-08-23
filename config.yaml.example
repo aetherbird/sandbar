@@ -23,13 +23,12 @@ providers:
       supports_tools: true
 
 tools:
-  # Tool approval modes, from least to most restrictive:
+  # Approval modes, from least to most restrictive:
   # yolo = allow all; write = prompt for exec; always-ask = prompt for write+exec.
-  # Missing tool metadata is classified as exec. Exact rules override tiers,
-  # and both override the selected mode.
-  # Approving delegate_task/resume_task grants the delegated run as one broad
-  # boundary: mode-derived child prompts are not repeated, while explicit
-  # per-tool/per-tier deny and prompt rules remain in force inside subagents.
+  # Exact rules override tiers, both override the mode. Approving
+  # delegate_task/resume_task grants the delegated run as one broad boundary:
+  # mode-derived child prompts are not repeated, but explicit per-tool/tier
+  # deny and prompt rules stay in force inside subagents.
   approval:
     mode: "yolo"
     rules: {}               # e.g. {shell_exec: prompt, image_generate: deny}
@@ -46,8 +45,8 @@ tools:
       retention: "30m"
       termination_grace: "750ms"
   ssh:
-    # Remote shell_exec (host argument): the harness owns the ssh transport and
-    # quoting; the model passes a plain command. Any host works — none is special.
+    # Remote shell_exec (host argument): the harness owns the ssh transport
+    # and quoting; the model passes a plain command.
     connect_timeout: 5s
     batch_mode: true       # no interactive ssh prompts inside agent turns
     allowed_hosts: []      # empty = any host from ~/.ssh/config; else exact allowlist

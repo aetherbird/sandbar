@@ -128,15 +128,6 @@ func TestChatStreamThinkAcrossChunks(t *testing.T) {
 	}
 }
 
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if strings.EqualFold(s, item) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestCompleteWithOptions_MaxTokensNonStreaming(t *testing.T) {
 	var requestBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

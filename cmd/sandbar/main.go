@@ -99,12 +99,11 @@ func pendingInOrder(order []string, pending map[string]pendingToolLine) []pendin
 
 // ── Stream channel messages ───────────────────────────────────────────────────
 //
-// The goroutine consuming Backend.SendMessage writes streamItems into a
-// buffered channel.
-// waitForStreamItem is a tea.Cmd that blocks on one read from that channel
-// and returns it as a tea.Msg. After handling each item, Update re-issues
-// waitForStreamItem to pick up the next one. This is the canonical BubbleTea
-// real-time streaming pattern — no p.Send, no p.Printf from goroutines.
+// A goroutine consuming Backend.SendMessage writes streamItems into a buffered
+// channel; waitForStreamItem is a tea.Cmd that blocks on one read and returns
+// it as a tea.Msg, and Update re-issues it after each item. This is the
+// canonical BubbleTea real-time streaming pattern — no p.Send/Printf from
+// goroutines.
 
 type streamItem struct {
 	kind    string // "token" | "label" | "tool" | "result" | "ctx" | "done" | "err"
@@ -421,12 +420,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ta.SetWidth(taWidth)
 		m.syncInputHeight() // re-wrap may change the row count
-		// Printed lines are hard-wrapped to the terminal width (printLine), so
-		// a resize no longer needs a blanket clear — the bottom block just
-		// repaints. The one exception is a width DECREASE: already-printed
-		// lines physically re-wrap into more rows than the inline renderer
-		// counted, desyncing its line tracking (ghost dividers, leaked
-		// prompt), so force a clean repaint only then. Also skip the FIRST
+		// A resize no longer needs a blanket clear — the bottom block just
+		// repaints. A width DECREASE still forces a clean repaint: already-
+		// printed lines physically re-wrap into more rows than the inline
+		// renderer counted, desyncing its line tracking. Also skip the FIRST
 		// size event (delivered at launch) — clearing there would wipe the
 		// startup banner/hint printed before the program started.
 		if m.sized && msg.Width < prevWidth {
@@ -554,7 +551,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// nil for "(no items)", which correctly clears the panel.
 				m.todos = msg.todoRows
 			}
-			// Flush accumulated tokens first
 			flushed := m.flushTokens(true)
 			if flushed != nil {
 				cmds = append(cmds, flushed)
@@ -565,12 +561,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.content != "" {
 				// A tool line opens a new block (one blank line above) — except
 				// consecutive calls of the SAME tool, which pack together with
-				// no separating blank. A diff is a multi-line, colorized result
-				// block (already indented); an orphan result hugs with indent.
-				// tea.Printf adds exactly one trailing newline, so spacing is
-				// owned here and not baked into the content strings. Everything
-				// goes through printLine, which hard-wraps to the terminal width
-				// so a printed line can never desync the inline renderer.
+				// no separating blank. Everything goes through printLine, which
+				// hard-wraps to the terminal width so a printed line can never
+				// desync the inline renderer.
 				switch msg.kind {
 				case "diff":
 					m.lastToolName = ""
@@ -590,7 +583,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
 		case "ctx":
-			// Live context-gauge update mid-turn; no printed output.
 			if msg.ctxUsed > 0 {
 				m.ctxUsed = msg.ctxUsed
 			}
@@ -697,7 +689,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ta.Value() != pre.value {
 			m.pushUndo(pre) // a normal paste is one undoable step
 		}
-		// A paste changes the text: re-arm the popups, same as typing.
 		m.mentionSel = 0
 		m.mentionDismissed = false
 		m.draft = ""
@@ -753,11 +744,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMode = "" // exit search mode, keep the matched text
 				return m, nil
 			case "enter":
-				// Accept the match: exit search mode and fall through so the
-				// main Enter handler submits the textarea's value normally.
-				// Completion popups are suppressed for this keypress — a
-				// recalled entry that happens to contain a path or an @-word
-				// must send, not complete — and the send path re-arms them.
+				// Exit search mode and fall through so the main Enter handler
+				// submits the textarea's value. Completion popups are suppressed
+				// for this keypress — a recalled entry that happens to contain a
+				// path or an @-word must send, not complete.
 				m.searchMode = ""
 				m.slashDismissed = true
 				m.mentionDismissed = true
@@ -830,7 +820,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ClearScreen
 
 		case "ctrl+r":
-			// Enter reverse-i-search mode.
 			if m.streaming || m.pickMode != "" {
 				return m, nil
 			}
@@ -1052,20 +1041,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pathDismissed = true // prevent immediate re-popup
 				return m, nil
 			}
-			// Alt+Enter inserts a newline. Also, if the current line ends with
-			// a backslash, consume it and insert a newline — this is the usual
-			// shell continuation convention and works in every terminal.
+			// Alt+Enter inserts a newline; a trailing backslash does too (shell
+			// continuation convention).
 			val := m.ta.Value()
 			alt := msg.String() == "alt+enter"
 			if alt || strings.HasSuffix(strings.TrimRight(val, " "), "\\") {
 				if alt {
 					m.ta.InsertString("\n")
 				} else {
-					// Remove trailing backslash (and any trailing spaces) and
-					// replace with a newline.
 					trimmed := strings.TrimRight(val, " ")
 					trimmed = strings.TrimSuffix(trimmed, "\\")
-					// Restore trailing spaces minus the backslash.
 					spaceCount := len(val) - len(strings.TrimRight(val, " "))
 					trimmed += strings.Repeat(" ", spaceCount) + "\n"
 					m.ta.SetValue(trimmed)
@@ -1119,11 +1104,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.histIdx = len(m.history)
 
-			// Echo user message with a divider above and below so it
-			// stands out from the stats footer and the next response.
-			// The message can be huge (@file expansion), so it is
-			// hard-wrapped to the terminal width; dividers are exactly
-			// m.width cells and stay as-is.
+			// Echo user message with a divider above and below; hard-wrapped to
+			// the terminal width (the message can be huge after @file expansion).
 			div := sty(cBorder).Render(strings.Repeat("─", m.width))
 			echo := wrapForPrint(userEchoStyle().Render(v), m.printWidth())
 			cmds = append(cmds, tea.Printf("\n%s\n%s\n%s", div, echo, div))
@@ -1134,7 +1116,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.streaming {
 				// Mid-turn message: prefer queueing it for delivery at the next
-				// tool boundary (Claude Code's behavior) over cancelling the turn.
+				// tool boundary over cancelling the turn.
 				if m.drainingGen == 0 {
 					if q, ok := m.sess.backend.(backend.MessageQueuer); ok && m.sess.threadID != "" {
 						enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1165,7 +1147,6 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var taCmd tea.Cmd
 		m.ta, taCmd = m.ta.Update(msg)
 		cmds = append(cmds, taCmd)
-		// Typing/backspace changes the filter → reset the suggestion highlight.
 		if m.ta.Value() != before {
 			// Every direct textarea edit is undoable: snapshot the pre-edit
 			// state (this also breaks the yank-pop chain — alt+y only
@@ -1179,9 +1160,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Clear draft when user types: the saved input is stale.
 			m.draft = ""
 		}
-		// Printed output is width-wrapped (printLine), so no height change
-		// sync is needed. The textarea uses a fixed viewport height and we
-		// clip in View().
+		// The textarea uses a fixed viewport height; View() clips it.
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -1856,7 +1835,6 @@ func (m appModel) pathSuggestions() []string {
 	lastSpace := strings.LastIndexAny(v, " \n")
 	word := v[lastSpace+1:]
 
-	// Must contain a "/" to be a path prefix.
 	slashIdx := strings.LastIndex(word, "/")
 	if slashIdx < 0 {
 		return nil
@@ -1868,8 +1846,6 @@ func (m appModel) pathSuggestions() []string {
 	if dir == "" {
 		dir = "/"
 	}
-
-	// Expand ~ to home directory.
 	if dir == "~" {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -2103,14 +2079,12 @@ func isFileRefPath(path string) bool {
 func expandFileRefs(input string) string {
 	return fileRefPattern.ReplaceAllStringFunc(input, func(match string) string {
 		path := match[1:] // strip the leading @
-		// .env is always excluded: auto-inlining secrets into a prompt is a footgun.
 		if filepath.Base(path) == ".env" {
 			return match
 		}
 		if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "~/") && !isFileRefPath(path) {
 			return match // relative path not on the includable list
 		}
-		// Expand ~ to home.
 		if strings.HasPrefix(path, "~/") {
 			home, err := os.UserHomeDir()
 			if err == nil {
@@ -3536,13 +3510,11 @@ func (m *appModel) flushGlamour() tea.Cmd {
 	// only, with hard-breaking for oversized tokens.
 	prefixed := indentGlamourOutput(wrapForPrint(rendered, m.proseWidth()))
 
-	// Count lines in the post-processed output (what we actually print).
 	lines := strings.Count(prefixed, "\n") + 1
 	if prefixed == "" {
 		lines = 0
 	}
 
-	// Build the ANSI-overwrite prefix if we have previous rendering to replace.
 	var prefix string
 	if m.lastRenderLines > 0 {
 		prefix = popUp(m.lastRenderLines) + clearBelow()

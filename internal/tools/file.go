@@ -14,13 +14,11 @@ const (
 	absoluteMaxBytes = 128 * 1024
 )
 
-// FileTools provides jailed file operations.
 type FileTools struct {
 	workspace string
 	subagents SubagentStore // optional: resolves agent:// subagent transcripts
 }
 
-// NewFileTools creates file tools jailed to workspace.
 func NewFileTools(workspace string) *FileTools {
 	return &FileTools{workspace: workspace}
 }
@@ -54,7 +52,6 @@ func (f *FileTools) validatePath(ctx context.Context, raw string) (string, error
 
 	workspace := f.resolveWorkspace(ctx)
 
-	// Relative paths: resolve within workspace.
 	resolved := filepath.Join(workspace, cleaned)
 	absResolved, err := filepath.Abs(resolved)
 	if err != nil {
@@ -66,7 +63,6 @@ func (f *FileTools) validatePath(ctx context.Context, raw string) (string, error
 		return "", fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	// Ensure resolved path is within workspace.
 	if !strings.HasPrefix(absResolved+string(filepath.Separator), absWorkspace+string(filepath.Separator)) &&
 		absResolved != absWorkspace {
 		return "", fmt.Errorf("path escapes workspace: %s", raw)
@@ -118,7 +114,6 @@ func (f *FileTools) FileRead(ctx context.Context, args map[string]interface{}) (
 	}
 	hash := sha256Hex(data)
 
-	// Binary / non-UTF-8 detection.
 	if !utf8.Valid(data) {
 		return fmt.Sprintf("[sha256: %s]\n[binary output suppressed: %d bytes]", hash, len(data)), nil
 	}

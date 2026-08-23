@@ -90,7 +90,6 @@ func ImageGenerate(ctx context.Context, args map[string]interface{}) (string, er
 	if len(msg.Images) > 0 && msg.Images[0].ImageURL.URL != "" {
 		imgURL := msg.Images[0].ImageURL.URL
 		if len(imgURL) > 100 && imgURL[:11] == "data:image/" {
-			// Extract base64 data after comma.
 			comma := bytes.IndexByte([]byte(imgURL), ',')
 			if comma < 0 {
 				return "[Image generated but could not decode]", nil
@@ -110,19 +109,10 @@ func ImageGenerate(ctx context.Context, args map[string]interface{}) (string, er
 
 	// Check for JSON-embedded image in content.
 	if msg.Content != "" {
-		// Model may return JSON with image data in content.
 		return fmt.Sprintf("[Image generation response]\n%s", msg.Content[:500]), nil
 	}
 
 	return "[Image gen: no image in response]", nil
-}
-
-// GenerateImageDirect is the standalone endpoint version — takes typed params directly.
-func GenerateImageDirect(ctx context.Context, prompt, apiKey string) (string, error) {
-	return ImageGenerate(ctx, map[string]interface{}{
-		"prompt":             prompt,
-		"openrouter_api_key": apiKey,
-	})
 }
 
 // resolveUploadsDir returns the generated-image output directory, jailed to

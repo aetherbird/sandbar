@@ -8,12 +8,10 @@ import (
 	"strings"
 )
 
-// GitTools provides git operations within the workspace.
 type GitTools struct {
 	workspace string
 }
 
-// NewGitTools creates git tools jailed to workspace.
 func NewGitTools(workspace string) *GitTools {
 	return &GitTools{workspace: workspace}
 }
@@ -53,7 +51,6 @@ func (g *GitTools) GitStatus(ctx context.Context, args map[string]interface{}) (
 	return out, nil
 }
 
-// GitDiff returns the git diff for a repository.
 func (g *GitTools) GitDiff(ctx context.Context, args map[string]interface{}) (string, error) {
 	repoPath, _ := args["repo_path"].(string)
 	if repoPath == "" {
@@ -105,7 +102,6 @@ func (g *GitTools) GitAdd(ctx context.Context, args map[string]interface{}) (str
 	return "Staged: " + strings.Join(paths, ", "), nil
 }
 
-// GitCommit commits staged changes.
 func (g *GitTools) GitCommit(ctx context.Context, args map[string]interface{}) (string, error) {
 	repoPath, _ := args["repo_path"].(string)
 	if repoPath == "" {

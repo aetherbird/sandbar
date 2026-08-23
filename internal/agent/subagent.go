@@ -25,7 +25,6 @@ func newFileTracker() *fileTracker {
 }
 
 // trackFileOp records a file operation from a tool call's arguments.
-// toolName is the tool that was called; args holds the parsed arguments.
 func (ft *fileTracker) trackFileOp(toolName string, args map[string]interface{}) {
 	path, _ := args["path"].(string)
 	if path == "" {
@@ -66,8 +65,8 @@ func (ft *fileTracker) trackURL(url string) {
 	ft.urlsFetched = append(ft.urlsFetched, url)
 }
 
-// Manifest returns a human-readable summary of all tracked file activity.
-// It is model-visible and designed to be appended to the subagent's result.
+// Manifest returns a human-readable summary of all tracked file activity,
+// appended to the subagent's result for the parent model to see.
 func (ft *fileTracker) Manifest() string {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -106,7 +105,7 @@ func (ft *fileTracker) Manifest() string {
 	return b.String()
 }
 
-// FilesRead returns a JSON array of read file paths.
+// FilesRead returns the read file paths.
 func (ft *fileTracker) FilesRead() []string {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -117,7 +116,7 @@ func (ft *fileTracker) FilesRead() []string {
 	return out
 }
 
-// FilesWritten returns a JSON array of written file paths.
+// FilesWritten returns the written file paths.
 func (ft *fileTracker) FilesWritten() []string {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -137,13 +136,6 @@ func (ft *fileTracker) CommandsRun() []string {
 	return out
 }
 
-// ── Prompt-injection scanning ────────────────────────────────────────────────
-
-// injectionPatterns are substrings that indicate a possible prompt-injection
-// attempt when they appear at the start of a line in a subagent's output.
-// If any of these patterns is found at the start of a line, that line is
-// escaped to prevent the parent model from interpreting it as a role
-// assignment, system instruction, or tool definition.
 var injectionLinePrefixes = []string{
 	"Human:",
 	"Assistant:",
@@ -193,7 +185,6 @@ func sanitizeSubagentOutput(result string) string {
 
 		if needsEscape {
 			hadInjection = true
-			// Escape the line by prefixing with a visible marker.
 			clean = append(clean, "[escaped] "+line)
 		} else {
 			clean = append(clean, line)
@@ -209,9 +200,6 @@ func sanitizeSubagentOutput(result string) string {
 	return result
 }
 
-// marshalStringsJSON is a small helper that serialises a []string to a JSON
-// array literal. We hand-roll a tiny one to keep the dependency on encoding/json
-// optional (we already import it elsewhere, so it is not a new import).
 func marshalStringsJSON(src []string) string {
 	if len(src) == 0 {
 		return "[]"

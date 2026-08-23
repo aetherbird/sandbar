@@ -166,8 +166,7 @@ func parseFunctionCallsInvoke(content string) []openai.ToolCall {
 			if tagEnd < 0 {
 				break
 			}
-			// Only whitespace may occur between the name quote and closing >.
-			// This keeps the accepted dialect narrow and predictable.
+			// Keep the accepted dialect narrow and predictable.
 			if strings.TrimSpace(afterQuote[:tagEnd]) != "" {
 				block = afterQuote[tagEnd+1:]
 				continue
@@ -339,14 +338,12 @@ func parseFunctionEquals(content string) []openai.ToolCall {
 
 	blocks := strings.Split(content, funcStart)
 	for _, block := range blocks[1:] {
-		// Tool name is everything up to the first '>'.
 		nameEnd := strings.Index(block, ">")
 		if nameEnd < 0 {
 			continue
 		}
 		toolName := resolveToolName(strings.TrimSpace(block[:nameEnd]))
 
-		// Body is up to funcEnd (or rest of block if no closing tag).
 		body := block
 		if endBlock := strings.Index(block, funcEnd); endBlock >= 0 {
 			body = block[:endBlock]
@@ -362,7 +359,6 @@ func parseFunctionEquals(content string) []openai.ToolCall {
 			}
 			idx += searchFrom + len(paramStart)
 
-			// Parameter key is up to the first '>'.
 			keyEnd := strings.Index(body[idx:], ">")
 			if keyEnd < 0 {
 				break

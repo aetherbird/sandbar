@@ -118,8 +118,6 @@ func delegateTask(runner SubagentRunner, ctx context.Context, args map[string]in
 		return "", fmt.Errorf("spawn subagent: %w", err)
 	}
 
-	// Collect all output from the sub-agent. Forward each event to the sink
-	// carried by this request's context, if any.
 	var result string
 	var partial strings.Builder
 loop:

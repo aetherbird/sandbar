@@ -4,23 +4,20 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// interruptedToolResult is the synthetic tool-result content used to seal an
-// assistant tool-call group whose turn ended before every call produced a
-// result. Provider APIs reject a payload in which an assistant tool_call is
-// not immediately followed by its tool result, so an interrupted turn poisons
-// the thread unless the missing results are filled with this marker.
+// interruptedToolResult seals an assistant tool-call group whose turn ended
+// before every call produced a result. Providers reject payloads where an
+// assistant tool_call is not immediately followed by its tool result, so a
+// turn interrupted mid-group would otherwise poison the thread.
 const interruptedToolResult = "error: tool call was not completed because the agent turn was interrupted"
 
-// sanitizeProviderMessages returns a copy of msgs repaired to satisfy provider
-// pairing rules:
+// sanitizeProviderMessages repairs msgs for provider pairing rules:
 //   - every assistant tool_call gets a following tool result before the next
-//     non-tool message (a synthetic interrupted result is inserted for calls
-//     that never received one),
+//     non-tool message (unanswered calls get a synthetic interrupted result),
 //   - tool messages referencing no unanswered call in the immediately
 //     preceding assistant group (orphans and duplicates) are dropped,
 //   - assistant messages with empty content and no tool calls are dropped.
 //
-// Everything else keeps its original order; the input slice is not modified.
+// Order is otherwise preserved; the input slice is not modified.
 func sanitizeProviderMessages(msgs []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {
@@ -30,8 +27,7 @@ func sanitizeProviderMessages(msgs []openai.ChatCompletionMessage) []openai.Chat
 		case msg.Role == openai.ChatMessageRoleAssistant && len(msg.ToolCalls) > 0:
 			out = append(out, msg)
 			pending, order := unansweredCallSet(msg.ToolCalls)
-			// Consume the tool results immediately following this group; keep
-			// only the first result per call ID.
+			// Keep only the first result per call ID among the following group.
 			for i < len(msgs) && msgs[i].Role == openai.ChatMessageRoleTool {
 				if answered, ok := pending[msgs[i].ToolCallID]; ok && !answered {
 					pending[msgs[i].ToolCallID] = true
@@ -53,10 +49,8 @@ func sanitizeProviderMessages(msgs []openai.ChatCompletionMessage) []openai.Chat
 			out = append(out, msg)
 		}
 	}
-	// Ensure every non-assistant message has a content field so that
-	// JSON serialization (which uses omitempty) never drops it.
-	// Providers reject payloads where a user, system, or tool message
-	// is missing the content key.
+	// omitempty in the wire JSON would drop an empty content key; providers
+	// reject user/system/tool messages missing it.
 	for i := range out {
 		if out[i].Role != openai.ChatMessageRoleAssistant && out[i].Content == "" {
 			out[i].Content = "(empty)"
@@ -65,10 +59,10 @@ func sanitizeProviderMessages(msgs []openai.ChatCompletionMessage) []openai.Chat
 	return out
 }
 
-// sanitizeIndexedMessages applies the same repair as sanitizeProviderMessages
-// to an indexed message view. Inserted results are Synthetic with Seq 0: they
-// patch the provider-facing view only and are never persisted, so compression
-// bookkeeping must not anchor on them.
+// sanitizeIndexedMessages applies the same repair to an indexed message view.
+// Inserted results are Synthetic with Seq 0: they patch the provider-facing
+// view only and are never persisted, so compression bookkeeping must not
+// anchor on them.
 func sanitizeIndexedMessages(msgs []indexedMessage) []indexedMessage {
 	out := make([]indexedMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {
@@ -103,8 +97,8 @@ func sanitizeIndexedMessages(msgs []indexedMessage) []indexedMessage {
 			out = append(out, im)
 		}
 	}
-	// Ensure every non-assistant message has a content field so that
-	// JSON serialization (which uses omitempty) never drops it.
+	// omitempty in the wire JSON would drop an empty content key; providers
+	// reject user/system/tool messages missing it.
 	for i := range out {
 		if out[i].Msg.Role != openai.ChatMessageRoleAssistant && out[i].Msg.Content == "" {
 			out[i].Msg.Content = "(empty)"
@@ -113,9 +107,8 @@ func sanitizeIndexedMessages(msgs []indexedMessage) []indexedMessage {
 	return out
 }
 
-// unansweredCallSet indexes the IDs of a tool-call group: pending maps each
-// unique non-empty ID to whether it has been answered, order preserves the
-// original call order for deterministic sealing.
+// unansweredCallSet indexes a tool-call group's unique non-empty IDs; pending
+// tracks which are answered, order preserves call order for deterministic sealing.
 func unansweredCallSet(toolCalls []openai.ToolCall) (pending map[string]bool, order []string) {
 	pending = make(map[string]bool, len(toolCalls))
 	for _, tc := range toolCalls {
@@ -131,7 +124,6 @@ func unansweredCallSet(toolCalls []openai.ToolCall) (pending map[string]bool, or
 	return pending, order
 }
 
-// syntheticToolResult builds the in-memory interrupted result for one call ID.
 func syntheticToolResult(toolCallID string) openai.ChatCompletionMessage {
 	return openai.ChatCompletionMessage{
 		Role:       openai.ChatMessageRoleTool,
@@ -141,9 +133,9 @@ func syntheticToolResult(toolCallID string) openai.ChatCompletionMessage {
 }
 
 // trailingUnansweredToolCalls returns the tool calls of the final assistant
-// tool-call group in msgs that have no following tool result, or nil when the
-// view does not end with a (possibly partially answered) assistant tool-call
-// group. Only persisted messages count; synthetic view entries are ignored.
+// tool-call group lacking a following tool result, or nil if the view does not
+// end with a (possibly partially answered) assistant tool-call group. Only
+// persisted messages count; synthetic view entries are ignored.
 func trailingUnansweredToolCalls(msgs []indexedMessage) []openai.ToolCall {
 	i := len(msgs) - 1
 	answered := map[string]bool{}

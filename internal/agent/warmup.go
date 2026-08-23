@@ -25,13 +25,9 @@ const keepaliveInterval = 4 * time.Minute
 const keepalivePingTimeout = 60 * time.Second
 
 // WarmupCompressionModel sends a tiny dummy request to the configured
-// compression model so its weights load into GPU memory at startup, not
-// mid-conversation when the user is waiting. Non-blocking — runs in a
-// background goroutine and silently ignores errors (best-effort).
-//
-// Only warms up if a dedicated compression model is configured (i.e. not
-// empty, which would fall back to the current chat model — that warms on
-// first message naturally).
+// compression model so its weights load at startup, not mid-conversation.
+// Best-effort: background goroutine, errors ignored. Only warms a dedicated
+// compression model — the chat model fallback warms on first use anyway.
 func (a *Agent) WarmupCompressionModel() {
 	if !a.cfg.Compression.Enabled {
 		return
@@ -47,10 +43,9 @@ func (a *Agent) WarmupCompressionModel() {
 	go a.pingModel(resolved, warmupTimeout)
 }
 
-// StartKeepalive launches a background goroutine that periodically pings the
-// compression model to keep its weights resident in GPU memory. This prevents
-// idle eviction (Ollama defaults to 5 minutes). Call StopKeepalive on
-// shutdown to clean up.
+// StartKeepalive periodically pings the compression model to keep its weights
+// resident (Ollama evicts idle models after 5 minutes). Call StopKeepalive on
+// shutdown.
 func (a *Agent) StartKeepalive() {
 	if !a.cfg.Compression.Enabled {
 		return

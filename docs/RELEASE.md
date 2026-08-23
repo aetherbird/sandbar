@@ -1,9 +1,7 @@
 # Release Guide
 
 How Sandbar releases work today. The module is `github.com/aetherbird/sandbar`
-(the repo is public under `github.com/aetherbird/sandbar`), the repo uses the
-root layout (`cmd/sandbar`, `internal/`, `migrations/`), and `v0.1.1` is
-tagged and pushed.
+(public repo, root layout: `cmd/sandbar`, `internal/`, `migrations/`).
 
 ## Current state
 

@@ -105,7 +105,6 @@ func parseDDGoHTML(html string) []ddgoResult {
 		if strings.Contains(line, "result__a") && strings.Contains(line, "href=\"") {
 			inResult = true
 			current = ddgoResult{}
-			// Extract URL
 			start := strings.Index(line, "href=\"")
 			if start != -1 {
 				start += 6

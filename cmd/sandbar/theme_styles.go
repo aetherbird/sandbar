@@ -27,10 +27,6 @@ type styleSet = cliui.Styles
 
 var activeStyleSet atomic.Pointer[styleSet]
 
-func terminalSupportsColor(mode string, output *os.File) bool {
-	return cliui.TerminalSupportsColor(mode, output)
-}
-
 func detectDarkBackground() bool { return cliui.DetectDarkBackground(os.Stdout) }
 
 func preferredTheme(flagValue, envValue, configured string) string {

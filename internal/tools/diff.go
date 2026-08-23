@@ -48,12 +48,10 @@ func splitLines(s string) []string {
 // strips the common prefix and suffix (O(n)) so the expensive LCS DP only runs
 // over the genuinely changed middle region.
 func lcsOps(a, b []string) []diffOp {
-	// Common prefix length.
 	p := 0
 	for p < len(a) && p < len(b) && a[p] == b[p] {
 		p++
 	}
-	// Common suffix length (bounded by remaining prefix).
 	sa, sb := len(a), len(b)
 	for sa > p && sb > p && a[sa-1] == b[sb-1] {
 		sa--

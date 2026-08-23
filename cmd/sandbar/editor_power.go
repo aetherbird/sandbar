@@ -1,6 +1,6 @@
 // Editor power: a readline-style kill ring, yank-pop, undo (ctrl+_), a
 // large-paste collapse, and an external-editor round-trip (ctrl+g) layered
-// over the bubbles v2 textarea — the legacy sandbar editor deltas.
+// over the bubbles v2 textarea.
 //
 // Every mutation works at the textarea's logical (line, rune-column) cursor
 // and rewrites via SetValue + a reposition, rather than fighting the widget's

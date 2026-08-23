@@ -35,8 +35,7 @@ func (p *Persona) BuildSystemPrompt(workspace, model string) string {
 	var b strings.Builder
 	b.WriteString(p.SystemPrompt)
 
-	// Environment block — mirrors what opencode and codex inject at runtime so
-	// the model can reason about where it is and what it is running as.
+	// Environment block: where the agent is and what it is running as.
 	b.WriteString("\n\n# Environment\n")
 	if workspace != "" {
 		b.WriteString(fmt.Sprintf("- Working directory: %s\n", workspace))
@@ -89,9 +88,8 @@ func yesNo(v bool) string {
 // loadProjectContext scans the workspace for known project instruction files
 // and returns their concatenated contents. Files are loaded in priority order;
 // if multiple exist, all are included with headers. Context files are the
-// owner's own instructions and are trusted as-is (a heuristic injection scan
-// was removed 2026-08-14 on owner decision — its false positives dropped
-// legitimate files wholesale).
+// owner's own instructions and are trusted as-is (an injection scan was
+// removed after its false positives dropped legitimate files wholesale).
 func loadProjectContext(workspace string) string {
 	var sections []string
 	for _, filename := range projectContextFiles {
