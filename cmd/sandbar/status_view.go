@@ -57,36 +57,47 @@ func (m appModel) approvalChip(s *styleSet) string {
 	}
 }
 
-func (m appModel) contextStatus(s *styleSet, compact bool) (string, string) {
+// ctxRole picks the gauge color for a context percentage: theme accent while
+// healthy, warn at 80%, critical at 90%.
+func ctxRole(pi int) string {
+	if pi >= 90 {
+		return cErr
+	}
+	if pi >= 80 {
+		return cWarn
+	}
+	return cAccent
+}
+
+func (m appModel) contextStatus(s *styleSet, compact bool) string {
 	if m.ctxMax <= 0 {
-		return "ctx --", cMuted
+		return s.Style(cMuted).Render("ctx --")
 	}
 	pct := float64(m.ctxUsed) / float64(m.ctxMax)
 	pi := int(pct * 100)
-	// Thermometer thresholds: warn at 80% context, critical at 90%.
-	role := cGreen
-	if pi >= 90 {
-		role = cErr
-	} else if pi >= 80 {
-		role = cWarn
-	}
+	role := ctxRole(pi)
 	if compact {
-		return fmt.Sprintf("ctx %d%%", pi), role
+		return s.Style(role).Render(fmt.Sprintf("ctx %d%%", pi))
 	}
 	// The ASCII profile drops the block gauge: █/░ are box-drawing glyphs
 	// (legacy renders a plain "ctx NN" there instead).
 	if s != nil && s.ColorProfile() == cliui.ProfileAscii {
-		return fmt.Sprintf("ctx %s/%s %d%%", fmtTok(m.ctxUsed), fmtTok(m.ctxMax), pi), role
+		return s.Style(role).Render(fmt.Sprintf("ctx %s/%s %d%%", fmtTok(m.ctxUsed), fmtTok(m.ctxMax), pi))
 	}
-	filled := int(8 * pct)
+	const gauge = 12
+	filled := int(gauge * pct)
 	if filled < 0 {
 		filled = 0
 	}
-	if filled > 8 {
-		filled = 8
+	if filled > gauge {
+		filled = gauge
 	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", 8-filled)
-	return fmt.Sprintf("%s/%s [%s] %d%%", fmtTok(m.ctxUsed), fmtTok(m.ctxMax), bar, pi), role
+	fill := strings.Repeat("█", filled)
+	empty := strings.Repeat("░", gauge-filled)
+	return s.Style(role).Render(fmt.Sprintf("%s/%s [", fmtTok(m.ctxUsed), fmtTok(m.ctxMax))) +
+		s.Style(role).Render(fill) +
+		s.Style(cMuted).Render(empty) +
+		s.Style(role).Render(fmt.Sprintf("] %d%%", pi))
 }
 
 // compressionStatus is the session-persistent trace of the most recent
@@ -185,11 +196,9 @@ func (m appModel) statusLine() string {
 	var left string
 	switch {
 	case width >= 78:
-		ctx, role := m.contextStatus(s, false)
-		left = " " + icon + " " + modelText + chip + separator + s.Style(role).Render(ctx)
+		left = " " + icon + " " + modelText + chip + separator + m.contextStatus(s, false)
 	case width >= 52:
-		ctx, role := m.contextStatus(s, true)
-		left = " " + icon + " " + modelText + chip + separator + s.Style(role).Render(ctx)
+		left = " " + icon + " " + modelText + chip + separator + m.contextStatus(s, true)
 	default:
 		left = " " + icon + " " + modelText
 	}

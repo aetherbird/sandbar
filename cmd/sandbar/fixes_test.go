@@ -407,20 +407,20 @@ func TestContextGaugeThresholds(t *testing.T) {
 		used, max int
 		want      string
 	}{
-		{0, 1000, cGreen},
-		{50, 100, cGreen},   // 50% — no dead warn tier anymore
-		{79, 100, cGreen},   // 79%
-		{80, 100, cWarn},    // 80%
-		{89, 100, cWarn},    // 89%
-		{90, 100, cErr},     // 90%
-		{100, 100, cErr},    // 100%
-		{999, 1000, cErr},   // 99%
-		{800, 1000, cWarn},  // 80%
-		{500, 1000, cGreen}, // 50% stays green
+		{0, 1000, cAccent},
+		{50, 100, cAccent},   // 50% — healthy rides the theme accent
+		{79, 100, cAccent},   // 79%
+		{80, 100, cWarn},     // 80%
+		{89, 100, cWarn},     // 89%
+		{90, 100, cErr},      // 90%
+		{100, 100, cErr},     // 100%
+		{999, 1000, cErr},    // 99%
+		{800, 1000, cWarn},   // 80%
+		{500, 1000, cAccent}, // 50%
 	}
 	for _, c := range cases {
 		m.ctxUsed, m.ctxMax = c.used, c.max
-		if _, role := m.contextStatus(nil, true); role != c.want {
+		if role := ctxRole(int(float64(c.used) / float64(c.max) * 100)); role != c.want {
 			t.Errorf("ctx %d/%d role = %q, want %q", c.used, c.max, role, c.want)
 		}
 	}
