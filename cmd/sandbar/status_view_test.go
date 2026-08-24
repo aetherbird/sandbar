@@ -116,13 +116,15 @@ func TestStatusLineAsciiFallback(t *testing.T) {
 
 // ── exact-width invariant ────────────────────────────────────────────────────
 
-// TestStatusLineNeverWraps pins the width invariant: at every tier boundary
-// (and a spread of widths in between), the bar renders exactly width cells,
-// on a single line, deterministically — including hostile Unicode model names
-// and a long cost segment.
+// TestStatusLineNeverWraps pins the width invariant: at every width from 8 to
+// 120 the bar renders exactly width cells, on a single line, deterministically
+// — including hostile Unicode model names and a long cost segment.
 func TestStatusLineNeverWraps(t *testing.T) {
 	s := colorfulStyle(t)
-	widths := []int{8, 10, 15, 20, 29, 30, 31, 40, 51, 52, 53, 60, 77, 78, 79, 100, 120}
+	var widths []int
+	for w := 8; w <= 120; w++ {
+		widths = append(widths, w)
+	}
 	for _, width := range widths {
 		m := appModel{
 			sess:    &session{modelAlias: "提供者/海洋-超长模型", cfg: &config.Config{Tools: config.ToolsConfig{Approval: config.ToolApprovalConfig{Mode: "always-ask"}}}},
@@ -144,6 +146,80 @@ func TestStatusLineNeverWraps(t *testing.T) {
 		}
 		if second := m.statusLine(); second != first {
 			t.Errorf("width %d: rendering is not deterministic:\n%q\n%q", width, first, second)
+		}
+	}
+}
+
+// ── full-width left/right layout ──────────────────────────────────────────────
+
+// TestStatusLineRightBlockSurvivesNarrowWidths pins the new layout contract:
+// when width is tight the fixed right block (activity + compression trace)
+// wins and the left block truncates from the end down to the model-only tier.
+func TestStatusLineRightBlockSurvivesNarrowWidths(t *testing.T) {
+	s := colorfulStyle(t)
+	m := appModel{
+		sess:            &session{modelAlias: "prov/test-model"},
+		styles:          s,
+		width:           24,
+		lastCompression: compressionStatus{beforeTokens: 128000, afterTokens: 42000},
+	}
+	got := stripANSI(m.statusLine())
+	if !strings.Contains(got, "⇣128K→42K") {
+		t.Errorf("right compression trace dropped at width 24: %q", got)
+	}
+	if strings.Contains(got, "test-model") {
+		t.Errorf("left block was not truncated at width 24: %q", got)
+	}
+	if !strings.Contains(got, "⚓") {
+		t.Errorf("model icon should survive truncation: %q", got)
+	}
+	if cells := lipgloss.Width(m.statusLine()); cells != 24 {
+		t.Errorf("status width = %d, want 24", cells)
+	}
+}
+
+// TestStatusLineCompressionSegments verifies the right-block compression
+// segment: an in-flight indicator while compressing, otherwise the persistent
+// before→after trace; the ASCII profile renders 7-bit glyphs.
+func TestStatusLineCompressionSegments(t *testing.T) {
+	s := colorfulStyle(t)
+
+	busy := appModel{
+		sess:            &session{modelAlias: "m"},
+		styles:          s,
+		width:           80,
+		compressing:     true,
+		lastCompression: compressionStatus{beforeTokens: 1000, afterTokens: 500},
+	}
+	if got := stripANSI(busy.statusLine()); !strings.Contains(got, "compressing") {
+		t.Errorf("in-flight indicator missing: %q", got)
+	}
+	if got := stripANSI(busy.statusLine()); strings.Contains(got, "⇣1K→500") {
+		t.Errorf("stale trace rendered while compressing: %q", got)
+	}
+
+	done := appModel{
+		sess:            &session{modelAlias: "m"},
+		styles:          s,
+		width:           80,
+		lastCompression: compressionStatus{beforeTokens: 128000, afterTokens: 42000},
+	}
+	if got := stripANSI(done.statusLine()); !strings.Contains(got, "⇣128K→42K") {
+		t.Errorf("persistent trace missing after compression: %q", got)
+	}
+
+	plain, err := newStyleSet("system", config.ColorModeNever, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.styles = plain
+	got := done.statusLine()
+	if !strings.Contains(got, "c:128K>42K") {
+		t.Errorf("ASCII compression trace missing: %q", got)
+	}
+	for _, fancy := range []string{"⇣", "→"} {
+		if strings.Contains(got, fancy) {
+			t.Errorf("ASCII profile still renders %q: %q", fancy, got)
 		}
 	}
 }

@@ -95,6 +95,11 @@ type CompressionEvent struct {
 	FallbackUsed            bool   `json:"fallback_used,omitempty"`
 	FallbackReason          string `json:"fallback_reason,omitempty"`
 	Error                   string `json:"error,omitempty"`
+	// ElapsedMS is the wall-clock duration of the whole compression operation
+	// (including the summarizer call), in milliseconds. It is populated on the
+	// terminal compression_end / compression_error events, mirroring the
+	// standalone --summarize-context contract's elapsed_ms field.
+	ElapsedMS int64 `json:"elapsed_ms,omitempty"`
 }
 
 // thinkParser tracks whether we are inside <think>...</think> blocks.

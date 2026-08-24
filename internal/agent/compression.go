@@ -315,6 +315,13 @@ type CompressionResult struct {
 	FallbackUsed   bool
 	FallbackReason string
 	Err            error
+	// SaveError records a failure to persist the compression record while the
+	// compression itself succeeded. It surfaces on the terminal event's error
+	// field so the UI can warn without mislabeling the outcome as a failure.
+	SaveError string
+	// ElapsedMS is the wall-clock duration of the whole compression operation,
+	// set by callers that time the compressIfNeeded call (Chat, CompressNow).
+	ElapsedMS int64
 }
 
 // ErrUnsafeProviderPayload marks a compression outcome that must not be sent
@@ -549,11 +556,13 @@ func (a *Agent) CompressNow(ctx context.Context, threadID, modelAlias string) (C
 	if err != nil {
 		return CompressionResult{}, fmt.Errorf("resolve model: %w", err)
 	}
-	msgs, err := a.buildMessages(threadID, a.cfg.Workspace, "cli", false)
+	msgs, err := a.buildMessages(threadID, a.cfg.Workspace, "cli", false, nil)
 	if err != nil {
 		return CompressionResult{}, fmt.Errorf("build messages: %w", err)
 	}
+	started := time.Now()
 	comp := a.compressIfNeeded(withForceCompression(ctx), threadID, msgs, modelAlias, resolved.ContextLength, CompressionModeTurnStart)
+	comp.ElapsedMS = time.Since(started).Milliseconds()
 	return comp, comp.Err
 }
 
@@ -878,7 +887,15 @@ func (a *Agent) compressIfNeeded(
 			SummaryCompletionTokens: result.SummaryCompletionTokens,
 			SummaryTotalTokens:      result.SummaryTotalTokens,
 		}
-		_ = a.store.SaveCompression(rec)
+		if err := a.store.SaveCompression(rec); err != nil {
+			// The summary is already in effect for this turn; only durable
+			// reuse across future turns failed. Keep the compressed outcome
+			// but surface the persistence failure on the terminal event so
+			// the UI shows it instead of silently losing the record.
+			result.SaveError = fmt.Sprintf("persist summary: %v", err)
+			result.FallbackUsed = true
+			result.FallbackReason = appendFallbackReason(result.FallbackReason, result.SaveError)
+		}
 	}
 
 	return result
@@ -1366,17 +1383,16 @@ func prepareCompressionBatch(batch []openai.ChatCompletionMessage) ([]openai.Cha
 // Event helpers
 // ----------------------------------------------------------------------------
 
-// buildCompressionStartEvent creates a CompressionEvent for the start of compression.
-func buildCompressionStartEvent(result CompressionResult, thresholdTokens int) *llm.CompressionEvent {
+// buildCompressionStartEvent creates a CompressionEvent for the start of
+// compression from the pre-work snapshot, so the payload is honest at emission
+// time: the summarizer has not run yet, so after/outcome fields stay unset.
+func buildCompressionStartEvent(pre compressionPreWork) *llm.CompressionEvent {
 	return &llm.CompressionEvent{
-		ModelAlias:             result.SummaryModelAlias,
-		ModelID:                result.SummaryModelID,
-		BeforeTokens:           result.BeforeTokens,
-		BudgetTokens:           result.BudgetTokens,
-		ThresholdTokens:        thresholdTokens,
-		TargetTokens:           result.TargetTokens,
-		RecentTailTargetTokens: result.RecentTailTargetTokens,
-		RecentTailTokens:       result.RecentTailTokens,
+		ModelAlias:      pre.modelAlias,
+		BeforeTokens:    pre.beforeTokens,
+		BudgetTokens:    pre.budgetTokens,
+		ThresholdTokens: pre.thresholdTokens,
+		TargetTokens:    pre.targetTokens,
 	}
 }
 
@@ -1401,6 +1417,8 @@ func buildCompressionEndEvent(result CompressionResult) *llm.CompressionEvent {
 		SummaryUsageCallCount:   result.SummaryUsageCallCount,
 		FallbackUsed:            result.FallbackUsed,
 		FallbackReason:          result.FallbackReason,
+		Error:                   result.SaveError,
+		ElapsedMS:               result.ElapsedMS,
 	}
 	return ev
 }
@@ -1430,22 +1448,58 @@ func buildCompressionAuxiliaryUsageEvent(result CompressionResult) *llm.StreamEv
 	}
 }
 
-// shouldAttemptCompression returns true when the thread exceeds its
-// compression budget. Used to decide whether to emit compression_start
-// before calling compressIfNeeded.
-func shouldAttemptCompression(msgs []indexedMessage, contextLength int, cfg config.CompressionConfig) bool {
+// compressionPreWork is the pre-work snapshot a compression_start event needs:
+// the token counts the compressor will act on plus the summarizer model alias,
+// computed before compressIfNeeded runs so the event payload is honest at
+// emission time.
+type compressionPreWork struct {
+	willAttempt     bool
+	beforeTokens    int
+	budgetTokens    int
+	thresholdTokens int
+	targetTokens    int
+	modelAlias      string
+}
+
+// preCompressionSnapshot decides whether a compression attempt is imminent and
+// captures the before/budget/threshold/target values the compressor will see.
+// It mirrors compressIfNeeded's own gating (enabled, over budget), so when
+// willAttempt is true the subsequent compressIfNeeded call is guaranteed to
+// produce a terminal compression event.
+func preCompressionSnapshot(msgs []indexedMessage, modelAlias string, contextLength int, cfg config.CompressionConfig) compressionPreWork {
 	if contextLength <= 0 || !cfg.Enabled {
-		return false
+		return compressionPreWork{}
 	}
 	counter := llm.NewTokenCounter()
-	raw := toRawMessages(msgs)
-	total := counter.CountMessages(raw)
+	before := counter.CountMessages(toRawMessages(msgs))
 	threshold := cfg.Threshold
 	if threshold <= 0 || threshold > 1 {
 		threshold = 0.80
 	}
 	budget := int(float64(contextLength) * threshold)
-	return total > budget
+	if before <= budget {
+		return compressionPreWork{}
+	}
+	modelAliasCfg := cfg.Model
+	if modelAliasCfg == "" {
+		modelAliasCfg = modelAlias
+	}
+	return compressionPreWork{
+		willAttempt:     true,
+		beforeTokens:    before,
+		budgetTokens:    budget,
+		thresholdTokens: budget,
+		targetTokens:    activeTurnTargetBudget(contextLength, budget, cfg.PostCompressionRatio),
+		modelAlias:      modelAliasCfg,
+	}
+}
+
+// shouldAttemptCompression returns true when the thread exceeds its
+// compression budget — the same pre-work gate preCompressionSnapshot derives
+// its payload from (kept as a thin wrapper for tests and callers that only
+// need the boolean).
+func shouldAttemptCompression(msgs []indexedMessage, contextLength int, cfg config.CompressionConfig) bool {
+	return preCompressionSnapshot(msgs, "", contextLength, cfg).willAttempt
 }
 
 // ----------------------------------------------------------------------------

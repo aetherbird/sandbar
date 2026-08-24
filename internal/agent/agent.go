@@ -67,6 +67,10 @@ type Agent struct {
 	// turnCancels maps a thread ID to the cancel func of its active turn, so the
 	// interrupt endpoint can cancel it out-of-band.
 	turnCancels sync.Map
+	// compressionLoadNoticeOnce caps the "cannot load saved compression
+	// summary" notice at one per agent lifetime: a persistently broken store
+	// would otherwise repeat it on every turn.
+	compressionLoadNoticeOnce sync.Once
 }
 
 type threadTurnLock struct {
@@ -636,18 +640,25 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 	}
 
 	// Build LLM message history.
-	indexedMsgs, err := a.buildMessages(thread.ID, req.Workspace, req.Source, req.PlanOnly)
+	indexedMsgs, err := a.buildMessages(thread.ID, req.Workspace, req.Source, req.PlanOnly, onEvent)
 	if err != nil {
 		return thread.ID, fmt.Errorf("build messages: %w", err)
 	}
 	{
-		comp := a.compressIfNeeded(ctx, thread.ID, indexedMsgs, req.ModelAlias, resolved.ContextLength, CompressionModeTurnStart)
-		indexedMsgs = comp.Messages
-		if comp.Outcome != CompressionOutcomeNone {
+		// Emit compression_start BEFORE the summarizer runs — the event carries
+		// the pre-work token snapshot, so consumers can show an in-flight state
+		// instead of receiving start/end back-to-back after the fact.
+		if pre := preCompressionSnapshot(indexedMsgs, req.ModelAlias, resolved.ContextLength, a.cfg.Compression); pre.willAttempt {
 			_ = onEvent(llm.StreamEvent{
 				Type:        "compression_start",
-				Compression: buildCompressionStartEvent(comp, comp.BudgetTokens),
+				Compression: buildCompressionStartEvent(pre),
 			})
+		}
+		started := time.Now()
+		comp := a.compressIfNeeded(ctx, thread.ID, indexedMsgs, req.ModelAlias, resolved.ContextLength, CompressionModeTurnStart)
+		comp.ElapsedMS = time.Since(started).Milliseconds()
+		indexedMsgs = comp.Messages
+		if comp.Outcome != CompressionOutcomeNone {
 			evType := "compression_end"
 			compressionEvent := buildCompressionEndEvent(comp)
 			if comp.Outcome == CompressionOutcomeError || (comp.Err != nil) {
@@ -913,14 +924,18 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 
 				// Re-compress if context has grown too large from tool results.
 				{
+					if pre := preCompressionSnapshot(indexedMsgs, req.ModelAlias, resolved.ContextLength, a.cfg.Compression); pre.willAttempt {
+						_ = onEvent(llm.StreamEvent{
+							Type:        "compression_start",
+							Compression: buildCompressionStartEvent(pre),
+						})
+					}
+					started := time.Now()
 					comp := a.compressIfNeeded(ctx, thread.ID, indexedMsgs, req.ModelAlias, resolved.ContextLength, CompressionModeMidLoop)
+					comp.ElapsedMS = time.Since(started).Milliseconds()
 					indexedMsgs = comp.Messages
 					llmMessages = toRawMessages(indexedMsgs)
 					if comp.Outcome != CompressionOutcomeNone {
-						_ = onEvent(llm.StreamEvent{
-							Type:        "compression_start",
-							Compression: buildCompressionStartEvent(comp, comp.BudgetTokens),
-						})
 						evType := "compression_end"
 						compressionEvent := buildCompressionEndEvent(comp)
 						if comp.Outcome == CompressionOutcomeError || (comp.Err != nil) {
@@ -1186,11 +1201,20 @@ func (a *Agent) executeTool(ctx context.Context, name, arguments, workspace stri
 	return a.tools.Execute(ctx, name, args)
 }
 
-func (a *Agent) buildMessages(threadID, workspace string, source string, planOnly bool) ([]indexedMessage, error) {
+// buildMessages assembles the indexed message view for a turn. onEvent, when
+// non-nil, receives a one-time "intermediate" notice if the saved compression
+// summary cannot be loaded (the turn continues with the full history).
+func (a *Agent) buildMessages(threadID, workspace string, source string, planOnly bool, onEvent func(llm.StreamEvent) error) ([]indexedMessage, error) {
 	// Load latest compression record and inject summary if valid.
 	var compRec *memory.CompressionRecord
 	if a.store != nil {
-		compRec, _ = a.store.GetLatestCompression(threadID)
+		var loadErr error
+		compRec, loadErr = a.store.GetLatestCompression(threadID)
+		if loadErr != nil && onEvent != nil {
+			a.compressionLoadNoticeOnce.Do(func() {
+				_ = onEvent(llm.StreamEvent{Type: "intermediate", Content: "compression: " + loadErr.Error() + " (continuing with full history)"})
+			})
+		}
 	}
 
 	var thread *memory.Thread

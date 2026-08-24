@@ -1298,3 +1298,104 @@ func TestAgentCompressionErrorEventIncludesDiagnosticAndAttemptMetadata(t *testi
 		t.Fatalf("unmeasured summary emitted measured auxiliary usage: %d", auxiliary)
 	}
 }
+
+// orderingSummarizer fails its call unless the compression_start event already
+// reached the event sink — pinning the event-order fix (start used to be
+// emitted after the work completed, back-to-back with end).
+type orderingSummarizer struct {
+	startSeen *bool
+	inner     Summarizer
+}
+
+func (o *orderingSummarizer) Summarize(ctx context.Context, req CompressionSummaryRequest) (*CompressionSummaryResult, error) {
+	if !*o.startSeen {
+		return nil, errors.New("compression_start was not emitted before the summarizer ran")
+	}
+	return o.inner.Summarize(ctx, req)
+}
+
+type orderingSummarizerFactory struct{ inner *orderingSummarizer }
+
+func (f *orderingSummarizerFactory) NewSummarizer(_ llm.ResolvedModel) Summarizer { return f.inner }
+
+// TestCompressionStartEmittedBeforeSummarizerRuns verifies the turn-start
+// compression_start event reaches the sink before the summarizer is invoked,
+// and that the terminal event carries the operation's elapsed time.
+func TestCompressionStartEmittedBeforeSummarizerRuns(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+	}))
+	defer ts.Close()
+
+	a, _, cleanup := setupTestAgent(t, true)
+	defer cleanup()
+	a.cfg.Providers[0].BaseURL = ts.URL
+	a.cfg.Persona.TitleModel = "missing-title-model"
+	ctxLen := 256
+	modelCfg := a.cfg.Providers[0].Models["test-model"]
+	modelCfg.ContextLength = &ctxLen
+	a.cfg.Providers[0].Models["test-model"] = modelCfg
+	a.cfg.Compression = config.CompressionConfig{
+		Enabled: true, Threshold: 0.80, TargetRatio: 0.20,
+		MinSummaryTokens: 8, MaxSummaryTokens: 64, Model: "test-model", TimeoutSeconds: 5,
+	}
+	a.registry = llm.NewRegistry(a.cfg)
+	workspace := t.TempDir()
+	a.tools = tools.NewRegistry(workspace, "", "", nil)
+
+	// Seed a thread whose history alone exceeds the budget, so turn-start
+	// compression fires before any provider call.
+	thread, err := a.store.CreateThread(nil, nil)
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	big := strings.Repeat("alpha beta gamma delta\n", 500)
+	if _, err := a.store.AppendMessage(thread.ID, "user", &big, nil); err != nil {
+		t.Fatalf("seed user message: %v", err)
+	}
+	if _, err := a.store.AppendMessage(thread.ID, "assistant", &big, nil); err != nil {
+		t.Fatalf("seed assistant message: %v", err)
+	}
+
+	startSeen := false
+	a.summarizers = &orderingSummarizerFactory{inner: &orderingSummarizer{
+		startSeen: &startSeen,
+		inner:     &fakeSummarizer{returnContent: "Ordering summary."},
+	}}
+
+	var events []llm.StreamEvent
+	if _, err := a.Chat(context.Background(), Request{
+		ModelAlias: "test-model", ThreadID: thread.ID, UserMessage: "continue", Workspace: workspace,
+	}, func(ev llm.StreamEvent) error {
+		if ev.Type == "compression_start" {
+			startSeen = true
+		}
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+
+	// The summarizer itself would have failed the turn-start compression with
+	// an ordering error (turning the outcome into a fallback), so a compressed
+	// outcome here proves the start event preceded the summarizer call.
+	var startIdx, endIdx = -1, -1
+	for i, ev := range events {
+		switch ev.Type {
+		case "compression_start":
+			startIdx = i
+			if ev.Compression == nil || ev.Compression.BeforeTokens <= ev.Compression.BudgetTokens {
+				t.Fatalf("start event did not carry the pre-work snapshot: %+v", ev.Compression)
+			}
+		case "compression_end":
+			endIdx = i
+			if ev.Compression == nil || ev.Compression.ElapsedMS < 0 {
+				t.Fatalf("end event missing elapsed time: %+v", ev.Compression)
+			}
+		}
+	}
+	if startIdx < 0 || endIdx < 0 || startIdx > endIdx {
+		t.Fatalf("compression event order: start=%d end=%d events=%v", startIdx, endIdx, events)
+	}
+}

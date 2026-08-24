@@ -1704,6 +1704,85 @@ func TestCompressIfNeeded_PersistsRecord(t *testing.T) {
 	}
 }
 
+// TestCompressIfNeeded_PersistFailureSurfacesOnResult verifies a failed
+// SaveCompression no longer vanishes: the compressed outcome is kept, but the
+// persistence failure surfaces on the terminal event (error field + fallback
+// marker) so the UI can warn.
+func TestCompressIfNeeded_PersistFailureSurfacesOnResult(t *testing.T) {
+	fake := &fakeSummarizer{returnContent: "Persisted summary."}
+	a := newTestAgentWithFakeSummarizer(t, fake)
+
+	thread, err := a.store.CreateThread(nil, nil)
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+
+	bigContent := strings.Repeat("word ", 100)
+	msgs := []indexedMessage{
+		{Synthetic: true, Kind: "system", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "sys"}},
+		{Seq: 1, Kind: "thread_message", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: bigContent}},
+		{Seq: 2, Kind: "thread_message", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: bigContent}},
+		{Seq: 3, Kind: "thread_message", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "Current question?"}},
+	}
+
+	a.store.Close() // force SaveCompression to fail
+
+	result := a.compressIfNeeded(context.Background(), thread.ID, msgs, "test-model", 100, CompressionModeTurnStart)
+	if result.Outcome != CompressionOutcomeCompressed {
+		t.Fatalf("expected compressed, got %s (fallback: %s)", result.Outcome, result.FallbackReason)
+	}
+	if result.SaveError == "" || !strings.Contains(result.SaveError, "persist summary") {
+		t.Fatalf("persistence failure did not surface: SaveError=%q", result.SaveError)
+	}
+	if !result.FallbackUsed {
+		t.Error("expected FallbackUsed=true after persistence failure")
+	}
+	ev := buildCompressionEndEvent(result)
+	if !strings.Contains(ev.Error, "persist summary") || !ev.FallbackUsed {
+		t.Fatalf("end event did not carry the persistence failure: %+v", ev)
+	}
+	if ev.Outcome != string(CompressionOutcomeCompressed) {
+		t.Fatalf("persistence failure mislabeled the outcome: %+v", ev)
+	}
+}
+
+// TestBuildMessagesSurfacesCompressionLoadErrorOnce verifies a failed
+// GetLatestCompression surfaces as a one-time "intermediate" notice instead of
+// being silently swallowed — and never repeats across turns.
+func TestBuildMessagesSurfacesCompressionLoadErrorOnce(t *testing.T) {
+	a := newTestAgentWithFakeSummarizer(t, &fakeSummarizer{})
+	thread, err := a.store.CreateThread(nil, nil)
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	content := "hi"
+	if _, err := a.store.AppendMessage(thread.ID, "user", &content, nil); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	a.store.Close() // force GetLatestCompression to fail
+
+	var notices []llm.StreamEvent
+	onEvent := func(ev llm.StreamEvent) error {
+		if ev.Type == "intermediate" {
+			notices = append(notices, ev)
+		}
+		return nil
+	}
+	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent); err == nil {
+		t.Fatal("expected an error when the store is unavailable")
+	}
+	if len(notices) != 1 || !strings.HasPrefix(notices[0].Content, "compression: ") {
+		t.Fatalf("expected exactly one compression notice, got %v", notices)
+	}
+	// The same broken store on a later turn must not repeat the notice.
+	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent); err == nil {
+		t.Fatal("expected an error when the store is unavailable")
+	}
+	if len(notices) != 1 {
+		t.Fatalf("compression load notice repeated across turns: %v", notices)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // Event helper tests
 // ----------------------------------------------------------------------------
@@ -1767,6 +1846,7 @@ func TestBuildCompressionEndEvent(t *testing.T) {
 		SummaryTotalTokens:      150,
 		SummaryCallCount:        2,
 		SummaryUsageCallCount:   2,
+		ElapsedMS:               3200,
 	}
 	ev := buildCompressionEndEvent(result)
 	if ev.ModelAlias != "test-model" {
@@ -1793,6 +1873,9 @@ func TestBuildCompressionEndEvent(t *testing.T) {
 	if ev.Outcome != string(CompressionOutcomeCompressed) || !ev.SummaryAttempted {
 		t.Fatalf("missing semantic compression metadata: %+v", ev)
 	}
+	if ev.ElapsedMS != 3200 {
+		t.Errorf("expected elapsed_ms=3200, got %d", ev.ElapsedMS)
+	}
 }
 
 func TestBuildCompressionErrorEvent(t *testing.T) {
@@ -1816,22 +1899,72 @@ func TestBuildCompressionErrorEvent(t *testing.T) {
 }
 
 func TestBuildCompressionStartEvent(t *testing.T) {
-	result := CompressionResult{
-		BeforeTokens:           8000,
-		BudgetTokens:           3200,
-		TargetTokens:           2400,
-		RecentTailTargetTokens: 900,
-		RecentTailTokens:       1000,
+	pre := compressionPreWork{
+		willAttempt:     true,
+		beforeTokens:    8000,
+		budgetTokens:    3200,
+		thresholdTokens: 3200,
+		targetTokens:    2400,
+		modelAlias:      "test-model",
 	}
-	ev := buildCompressionStartEvent(result, 3200)
+	ev := buildCompressionStartEvent(pre)
 	if ev.ThresholdTokens != 3200 {
 		t.Errorf("expected threshold_tokens=3200, got %d", ev.ThresholdTokens)
 	}
 	if ev.BeforeTokens != 8000 {
 		t.Errorf("expected before_tokens=8000, got %d", ev.BeforeTokens)
 	}
-	if ev.TargetTokens != 2400 || ev.RecentTailTargetTokens != 900 || ev.RecentTailTokens != 1000 {
-		t.Errorf("missing start target/tail provenance: %+v", ev)
+	if ev.BudgetTokens != 3200 || ev.TargetTokens != 2400 {
+		t.Errorf("missing start budget/target provenance: %+v", ev)
+	}
+	if ev.ModelAlias != "test-model" {
+		t.Errorf("expected model_alias=test-model, got %q", ev.ModelAlias)
+	}
+	// The start event is emitted before the summarizer runs: no outcome fields.
+	if ev.Outcome != "" || ev.AfterTokens != 0 || ev.ElapsedMS != 0 {
+		t.Errorf("start event carried terminal outcome fields: %+v", ev)
+	}
+}
+
+// TestPreCompressionSnapshot verifies the pre-work snapshot agrees with what
+// compressIfNeeded will see: it fires exactly when the thread exceeds its
+// compression budget and captures the before/budget/target values the start
+// event reports.
+func TestPreCompressionSnapshot(t *testing.T) {
+	cfg := config.CompressionConfig{Enabled: true, Threshold: 0.80, PostCompressionRatio: 0.50}
+	var big []indexedMessage
+	big = append(big, indexedMessage{Synthetic: true, Kind: "system", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "sys"}})
+	for i := 0; i < 20; i++ {
+		content := strings.Repeat("This is a test message with some content. ", 100)
+		big = append(big, indexedMessage{Seq: i + 1, Kind: "thread_message", Msg: openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: content}})
+	}
+
+	below := preCompressionSnapshot(big[:4], "conv-model", 8192, cfg)
+	if below.willAttempt {
+		t.Fatal("small context should not attempt compression")
+	}
+	pre := preCompressionSnapshot(big, "conv-model", 4096, cfg)
+	if !pre.willAttempt {
+		t.Fatal("over-budget context should attempt compression")
+	}
+	if pre.beforeTokens <= pre.budgetTokens {
+		t.Fatalf("snapshot before/budget incoherent: before=%d budget=%d", pre.beforeTokens, pre.budgetTokens)
+	}
+	if pre.thresholdTokens != pre.budgetTokens {
+		t.Fatalf("threshold tokens = %d, want budget %d", pre.thresholdTokens, pre.budgetTokens)
+	}
+	if pre.targetTokens <= 0 || pre.targetTokens > pre.budgetTokens {
+		t.Fatalf("target tokens = %d out of (0, budget=%d]", pre.targetTokens, pre.budgetTokens)
+	}
+	if pre.modelAlias != "conv-model" {
+		t.Fatalf("model alias = %q, want conversation model %q", pre.modelAlias, "conv-model")
+	}
+
+	// A configured summarizer model wins over the conversation model.
+	cfg.Model = "summary-model"
+	pre = preCompressionSnapshot(big, "conv-model", 4096, cfg)
+	if pre.modelAlias != "summary-model" {
+		t.Fatalf("model alias = %q, want configured %q", pre.modelAlias, "summary-model")
 	}
 }
 

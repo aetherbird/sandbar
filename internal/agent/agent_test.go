@@ -56,7 +56,7 @@ func setupTestAgent(t *testing.T, supportsTools bool) (*Agent, *memory.Store, fu
 // test when the history cannot be loaded or repaired.
 func mustBuildMessages(t *testing.T, a *Agent, threadID, workspace, source string) []indexedMessage {
 	t.Helper()
-	msgs, err := a.buildMessages(threadID, workspace, source, false)
+	msgs, err := a.buildMessages(threadID, workspace, source, false, nil)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
@@ -1493,14 +1493,14 @@ func TestBuildMessagesPlanModeDirective(t *testing.T) {
 	if _, err := a.store.AppendMessage(thread.ID, "user", strPtr("plan the thing"), nil); err != nil {
 		t.Fatalf("seed message: %v", err)
 	}
-	msgs, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", true)
+	msgs, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", true, nil)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
 	if msgs[0].Msg.Role != openai.ChatMessageRoleSystem || !strings.Contains(msgs[0].Msg.Content, "PLAN MODE") {
 		t.Fatalf("plan-mode directive missing from system prompt: %q", msgs[0].Msg.Content)
 	}
-	plain, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", false)
+	plain, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", false, nil)
 	if err != nil {
 		t.Fatalf("buildMessages plain: %v", err)
 	}

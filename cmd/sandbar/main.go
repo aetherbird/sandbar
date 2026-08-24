@@ -132,6 +132,12 @@ type streamItem struct {
 
 	approvalReq   *tools.ApprovalRequest
 	approvalReply chan<- tools.ApprovalDecision
+
+	// Compression event state sync (kind "compression"): the raw event and its
+	// type, so Update can maintain compressing/lastCompression without parsing
+	// rendered transcript text.
+	compType  string
+	compEvent *llm.CompressionEvent
 }
 
 // waitForStreamItem blocks on one read from ch and tags the delivered item
@@ -218,12 +224,18 @@ type appModel struct {
 	ctxUsed   int
 	ctxMax    int
 	costSeg   string // cumulative session cost segment ("" = pricing inactive)
-	streaming bool
-	sized     bool // first WindowSizeMsg seen (skip the launch-time auto-clear)
-	spinIdx   int  // animation frame for the streaming spinner
-	cancel    context.CancelFunc
-	streamCh  <-chan streamItem
-	streamGen int // generation of the stream whose items are currently accepted
+	// Compression UI state. compressing is the in-flight indicator while a
+	// compression runs; lastCompression is a session-persistent trace of the
+	// most recent outcome — deliberately never cleared, so the status bar
+	// keeps showing the last before→after delta.
+	compressing     bool
+	lastCompression compressionStatus
+	streaming       bool
+	sized           bool // first WindowSizeMsg seen (skip the launch-time auto-clear)
+	spinIdx         int  // animation frame for the streaming spinner
+	cancel          context.CancelFunc
+	streamCh        <-chan streamItem
+	streamGen       int // generation of the stream whose items are currently accepted
 
 	// "!" shell escape in flight: a cancelable context so Ctrl+C stops the
 	// running command instead of quitting the app mid-escape. A second Ctrl+C
@@ -460,9 +472,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case compressDoneMsg:
+		m.compressing = false
 		if msg.err != nil {
 			cmds = append(cmds, m.printLine("\n"+sty(cErr).Render("  ⚠ compress failed: "+msg.err.Error())))
 		} else {
+			m.lastCompression = compressionStatusFromResult(msg.res)
 			line, color := renderCompressionLine(compressionEventFromResult(msg.res))
 			cmds = append(cmds, m.printLine("\n"+sty(color).Render(line)))
 		}
@@ -591,6 +605,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
+		case "compression":
+			// Compression lifecycle state for the status bar, driven by the raw
+			// event (not the rendered line): start sets the in-flight flag,
+			// terminal events clear it and record the session-persistent trace.
+			switch msg.compType {
+			case "compression_start":
+				m.compressing = true
+			case "compression_end", "compression_error":
+				m.compressing = false
+				if msg.compEvent != nil {
+					m.lastCompression = compressionStatusFromEvent(msg.compEvent)
+				}
+			}
+			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
+
 		case "subagent":
 			m.updateSubagentHUD(msg)
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
@@ -612,6 +641,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "done":
 			m.streaming = false
+			m.compressing = false
 			m.turnDur = time.Since(m.turnStart)
 			m.cancel = nil
 			m.lastToolName = ""
@@ -639,6 +669,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "err":
 			m.streaming = false
+			m.compressing = false
 			m.turnDur = time.Since(m.turnStart)
 			m.cancel = nil
 			m.lastToolName = ""
@@ -1484,6 +1515,10 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 				// Retry notices are useful, so retain only those informational events.
 				if strings.HasPrefix(ev.Content, "retrying ") {
 					ch <- streamItem{kind: "activity", content: sty(cWarn).Render("↻ " + ev.Content)}
+				} else if strings.HasPrefix(ev.Content, "compression: ") {
+					// Non-fatal compression plumbing notice (e.g. a saved summary
+					// that could not be loaded): surfaced once per session.
+					ch <- streamItem{kind: "activity", content: sty(cWarn).Render("⚠ " + strings.TrimPrefix(ev.Content, "compression: "))}
 				}
 
 			case "user_message":
@@ -1597,6 +1632,7 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 			case "compression_start":
 				if ev.Compression != nil {
 					c := ev.Compression
+					ch <- streamItem{kind: "compression", compType: "compression_start", compEvent: c}
 					var sb strings.Builder
 					sb.WriteString("⟳ compressing context")
 					if c.ModelAlias != "" {
@@ -1604,9 +1640,9 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 					}
 					if c.BeforeTokens > 0 && c.BudgetTokens > 0 && c.BudgetTokens < c.BeforeTokens {
 						pct := 100 * c.BeforeTokens / c.BudgetTokens
-						sb.WriteString(fmt.Sprintf(" (%d tokens, %d%% of %d budget)", c.BeforeTokens, pct, c.BudgetTokens))
+						sb.WriteString(fmt.Sprintf(" (%s tokens, %d%% of %s budget)", fmtTok(c.BeforeTokens), pct, fmtTok(c.BudgetTokens)))
 					} else if c.BeforeTokens > 0 {
-						sb.WriteString(fmt.Sprintf(" (%d tokens)", c.BeforeTokens))
+						sb.WriteString(fmt.Sprintf(" (%s tokens)", fmtTok(c.BeforeTokens)))
 					}
 					sb.WriteString("…")
 					ch <- streamItem{kind: "tool", content: sty(cWarn).Render(clip(sb.String(), width-4))}
@@ -1614,17 +1650,23 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 
 			case "compression_end":
 				if ev.Compression != nil {
+					ch <- streamItem{kind: "compression", compType: "compression_end", compEvent: ev.Compression}
 					line, color := renderCompressionLine(ev.Compression)
 					ch <- streamItem{kind: "tool", content: sty(color).Render(line)}
 				}
 
 			case "compression_error":
 				if ev.Compression != nil {
+					ch <- streamItem{kind: "compression", compType: "compression_error", compEvent: ev.Compression}
 					reason := ev.Compression.FallbackReason
 					if reason == "" && ev.Compression.Error != "" {
 						reason = ev.Compression.Error
 					}
-					ch <- streamItem{kind: "tool", content: sty(cErr).Render(clip("⚠ compression failed: "+reason, width-2-2))}
+					line := "⚠ compression failed: " + reason
+					if ev.Compression.ElapsedMS > 0 {
+						line += fmt.Sprintf(" (in %s)", fmtDurMS(ev.Compression.ElapsedMS))
+					}
+					ch <- streamItem{kind: "tool", content: sty(cErr).Render(clip(line, width-2-2))}
 				}
 
 			case "auxiliary_usage":
@@ -2720,6 +2762,7 @@ func (m *appModel) compressNow() tea.Cmd {
 	if m.sess.cfg.Compression.Model != "" {
 		compressModel = m.sess.cfg.Compression.Model
 	}
+	m.compressing = true
 	return tea.Batch(
 		tea.Printf("\n%s", sty(cWarn).Render("  ⟳ compressing context with "+compressModel+"…")),
 		func() tea.Msg {
@@ -2733,15 +2776,35 @@ func (m *appModel) compressNow() tea.Cmd {
 // It is the shared renderer for both the /compress result and streamed
 // compression_end events so the two surfaces can never drift apart.
 func renderCompressionLine(c *llm.CompressionEvent) (string, string) {
+	// reductionPct is the integer percentage the token count dropped.
+	reductionPct := func() int {
+		if c.BeforeTokens <= 0 {
+			return 0
+		}
+		return 100 * (c.BeforeTokens - c.AfterTokens) / c.BeforeTokens
+	}
+	// elapsed suffixes a duration when the operation was timed.
+	elapsed := func() string {
+		if c.ElapsedMS <= 0 {
+			return ""
+		}
+		return fmt.Sprintf(" · in %s", fmtDurMS(c.ElapsedMS))
+	}
 	switch c.Outcome {
 	case string(agent.CompressionOutcomeCompressed):
-		line := fmt.Sprintf("  ◈ LLM summarized: %d → %d tokens", c.BeforeTokens, c.AfterTokens)
-		var details []string
-		if c.CompressedMessageCount > 0 {
-			details = append(details, fmt.Sprintf("%d messages", c.CompressedMessageCount))
+		line := fmt.Sprintf("  ◈ LLM summarized: %s → %s", fmtTokF(c.BeforeTokens), fmtTokF(c.AfterTokens))
+		if pct := reductionPct(); pct > 0 {
+			line += fmt.Sprintf(" (−%d%%)", pct)
 		}
+		var details []string
 		if c.ModelAlias != "" {
 			details = append(details, "model "+c.ModelAlias)
+		}
+		if c.ElapsedMS > 0 {
+			details = append(details, "in "+fmtDurMS(c.ElapsedMS))
+		}
+		if c.CompressedMessageCount > 0 {
+			details = append(details, fmt.Sprintf("%d messages", c.CompressedMessageCount))
 		}
 		if c.PrunedToolOutputs > 0 {
 			details = append(details, fmt.Sprintf("%d tool outputs trimmed", c.PrunedToolOutputs))
@@ -2761,27 +2824,42 @@ func renderCompressionLine(c *llm.CompressionEvent) (string, string) {
 		if c.SummaryTotalTokens > 0 {
 			line += fmt.Sprintf(" · summarizer %d in · %d out", c.SummaryPromptTokens, c.SummaryCompletionTokens)
 		}
+		// A non-fatal persistence failure still compresses this turn; show it as
+		// a warning suffix rather than silently dropping the record.
+		if c.Error != "" {
+			line += " — " + c.Error
+			return line, cWarn
+		}
 		return line, cAccent
 
 	case string(agent.CompressionOutcomePruned):
-		line := fmt.Sprintf("  ◈ pruned tool outputs: %d → %d tokens", c.BeforeTokens, c.AfterTokens)
+		line := fmt.Sprintf("  ◈ pruned tool outputs: %s → %s", fmtTokF(c.BeforeTokens), fmtTokF(c.AfterTokens))
+		if pct := reductionPct(); pct > 0 {
+			line += fmt.Sprintf(" (−%d%%)", pct)
+		}
 		if c.PrunedToolOutputs > 0 {
 			line += fmt.Sprintf(" (%d outputs)", c.PrunedToolOutputs)
 		}
+		line += elapsed()
 		return line, cMuted
 
 	case string(agent.CompressionOutcomeFallback):
 		if c.AfterTokens >= c.BeforeTokens {
-			line := fmt.Sprintf("  ◈ nothing further to compress (%d → %d tokens)", c.BeforeTokens, c.AfterTokens)
+			line := fmt.Sprintf("  ◈ nothing further to compress (%s → %s tokens)", fmtTokF(c.BeforeTokens), fmtTokF(c.AfterTokens))
 			if c.FallbackReason != "" {
 				line += " — " + c.FallbackReason
 			}
+			line += elapsed()
 			return line, cWarn
 		}
-		line := fmt.Sprintf("  ◈ truncated to budget: %d → %d tokens", c.BeforeTokens, c.AfterTokens)
+		line := fmt.Sprintf("  ◈ truncated to budget: %s → %s", fmtTokF(c.BeforeTokens), fmtTokF(c.AfterTokens))
+		if pct := reductionPct(); pct > 0 {
+			line += fmt.Sprintf(" (−%d%%)", pct)
+		}
 		if c.FallbackReason != "" {
 			line += " — " + c.FallbackReason
 		}
+		line += elapsed()
 		return line, cWarn
 
 	case string(agent.CompressionOutcomeError):
@@ -2789,13 +2867,14 @@ func renderCompressionLine(c *llm.CompressionEvent) (string, string) {
 		if c.FallbackReason != "" {
 			line += ": " + c.FallbackReason
 		}
+		line += elapsed()
 		return line, cErr
 
 	case string(agent.CompressionOutcomeNone):
 		return "  ◈ nothing to compress (conversation too short)", cMuted
 
 	default:
-		status := fmt.Sprintf("  ⟳ message-context estimate compressed: %d → %d tokens", c.BeforeTokens, c.AfterTokens)
+		status := fmt.Sprintf("  ⟳ message-context estimate compressed: %s → %s", fmtTokF(c.BeforeTokens), fmtTokF(c.AfterTokens))
 		if c.TargetTokens > 0 {
 			status += fmt.Sprintf(" (target ≤ %d", c.TargetTokens)
 			if c.RecentTailTokens > 0 {
@@ -2806,6 +2885,7 @@ func renderCompressionLine(c *llm.CompressionEvent) (string, string) {
 			}
 			status += ")"
 		}
+		status += elapsed()
 		return status, cMuted
 	}
 }
@@ -2831,6 +2911,8 @@ func compressionEventFromResult(res agent.CompressionResult) *llm.CompressionEve
 		SummaryCallCount:        res.SummaryCallCount,
 		FallbackUsed:            res.FallbackUsed,
 		FallbackReason:          res.FallbackReason,
+		Error:                   res.SaveError,
+		ElapsedMS:               res.ElapsedMS,
 	}
 }
 
@@ -3419,6 +3501,29 @@ func fmtTok(n int) string {
 		return fmt.Sprintf("%d", n)
 	}
 	return fmt.Sprintf("%.0fK", float64(n)/1000)
+}
+
+// fmtTokF is fmtTok with one decimal place at thousands scale, used by the
+// compression summaries where a precise before→after delta reads better
+// (e.g. "128.0K → 42.3K").
+func fmtTokF(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fK", float64(n)/1000)
+}
+
+// fmtDurMS renders a millisecond duration for compression outcomes: sub-second
+// stays in milliseconds, under a minute keeps one decimal second ("3.2s"),
+// longer durations fall back to m/s like fmtDur.
+func fmtDurMS(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms < 60000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	return fmt.Sprintf("%dm%ds", ms/60000, (ms%60000)/1000)
 }
 
 func fmtTime(t time.Time) string {

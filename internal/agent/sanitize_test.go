@@ -399,7 +399,7 @@ func TestBuildMessagesFailsOnStoreError(t *testing.T) {
 	}
 	store.Close() // force subsequent reads to fail
 
-	if _, err := agent.buildMessages(thread.ID, "", "web", false); err == nil {
+	if _, err := agent.buildMessages(thread.ID, "", "web", false, nil); err == nil {
 		t.Fatal("expected an error when the store is unavailable")
 	}
 }
