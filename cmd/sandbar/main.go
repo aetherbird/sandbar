@@ -124,6 +124,10 @@ type streamItem struct {
 	// separating blank line between consecutive calls of the same tool.
 	toolName string
 
+	// repaintAfter forces a clean screen repaint after this line prints
+	// (used by compression summary lines to recover inline-renderer drift).
+	repaintAfter bool
+
 	// todoSet reports that this item carries the thread's latest todo list in
 	// todoRows (a successful todo tool result). Update adopts it into the
 	// sticky task panel instead of the list being printed into scrollback.
@@ -478,7 +482,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastCompression = compressionStatusFromResult(msg.res)
 			line, color := renderCompressionLine(compressionEventFromResult(msg.res))
-			cmds = append(cmds, m.printLine("\n"+sty(color).Render(line)))
+			// Print then clean-repaint so drift cannot hide the input block.
+			cmds = append(cmds, tea.Sequence(m.printLine("\n"+sty(color).Render(line)), tea.ClearScreen))
 		}
 		cmds = append(cmds, m.contextCmd())
 
@@ -590,7 +595,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if msg.toolName != "" && msg.toolName == m.lastToolName {
 						prefix = ""
 					}
-					cmds = append(cmds, m.printLine(prefix+msg.content))
+					printCmd := m.printLine(prefix + msg.content)
+					if msg.repaintAfter {
+						// Compression summary lines: force a clean repaint after
+						// printing so any inline-renderer drift cannot leave the
+						// bottom block (input + status bar) drawn off-position.
+						printCmd = tea.Sequence(printCmd, tea.ClearScreen)
+					}
+					cmds = append(cmds, printCmd)
 					m.lastToolName = msg.toolName
 				}
 			}
@@ -1652,7 +1664,7 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 				if ev.Compression != nil {
 					ch <- streamItem{kind: "compression", compType: "compression_end", compEvent: ev.Compression}
 					line, color := renderCompressionLine(ev.Compression)
-					ch <- streamItem{kind: "tool", content: sty(color).Render(line)}
+					ch <- streamItem{kind: "tool", content: sty(color).Render(line), repaintAfter: true}
 				}
 
 			case "compression_error":
@@ -1666,7 +1678,7 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 					if ev.Compression.ElapsedMS > 0 {
 						line += fmt.Sprintf(" (in %s)", fmtDurMS(ev.Compression.ElapsedMS))
 					}
-					ch <- streamItem{kind: "tool", content: sty(cErr).Render(clip(line, width-2-2))}
+					ch <- streamItem{kind: "tool", content: sty(cErr).Render(clip(line, width-2-2)), repaintAfter: true}
 				}
 
 			case "auxiliary_usage":
