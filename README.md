@@ -1,8 +1,8 @@
 # Sandbar
 
 Sandbar is a standalone terminal AI coding-agent harness in Go: a streaming
-REPL backed by any OpenAI-compatible model endpoint — cloud (OpenRouter,
-OpenAI, Gemini) or local (Ollama, llama.cpp, vLLM) — with 15 built-in tools
+REPL backed by any OpenAI-compatible model endpoint, cloud (OpenRouter,
+OpenAI, Gemini) or local (Ollama, llama.cpp, vLLM), with 15 built-in tools
 behind tiered approvals, a SQLite thread store with full-text search,
 automatic context compression, subagents, plan mode, themes, and a `--json`
 event stream for scripting. It boots with zero configuration from
@@ -11,41 +11,41 @@ component and no telemetry: everything runs and stays on your machine.
 
 ## Features
 
-- **Streaming REPL** — inline Bubble Tea interface (no alt-screen) with live
+- **Streaming REPL**: inline Bubble Tea interface (no alt-screen) with live
   reasoning display, context gauge, and session timer.
-- **15 tools, tiered approvals** — file read/write/append/patch, shell (local
+- **15 tools, tiered approvals**: file read/write/append/patch, shell (local
   or SSH), background jobs, git, web search, content search, web fetch, todo
   tracking, subagent delegation/resume, image generation, vision analysis.
   Every tool is classified `read`/`write`/`exec`; approve per tier, per tool,
   or per session. Approvals fail closed in headless runs.
-- **SHA-256 write preconditions** — mutating file tools require the digest
+- **SHA-256 write preconditions**: mutating file tools require the digest
   observed at last read, so conflicting writes fail loudly instead of
   silently overwriting.
-- **Cost rollups** — usage events are priced against an embedded
+- **Cost rollups**: usage events are priced against an embedded
   models.dev catalog snapshot (fully offline); the status bar and one-shot
   footer show cumulative spend, hidden for unknown or free models.
-- **Read schemes** — `file_read` resolves `pr://<n>`, `issue://<n>` (GitHub
+- **Read schemes**: `file_read` resolves `pr://<n>`, `issue://<n>` (GitHub
   via your `gh` CLI) and `agent://<task-id>` (persisted subagent
   transcripts) before touching the filesystem.
-- **SQLite thread store** — every conversation persisted locally with WAL
+- **SQLite thread store**: every conversation persisted locally with WAL
   journaling, FTS5 full-text search (`/search`), session resume, forking, and
   undo.
-- **Context auto-compression** — real BPE token counting (offline-embedded
+- **Context auto-compression**: real BPE token counting (offline-embedded
   vocabulary), summarization with group-aware boundaries that never split
   tool calls from results, and observable fallbacks. No silent history loss.
-- **Subagents** — delegate self-contained subtasks (`delegate_task`), resume
+- **Subagents**: delegate self-contained subtasks (`delegate_task`), resume
   interrupted ones (`resume_task`); independent delegations run concurrently.
-- **Plan mode** — `--plan` / `/plan` runs a read-only turn that produces a
+- **Plan mode**: `--plan` / `/plan` runs a read-only turn that produces a
   plan you approve before anything changes.
-- **Themes** — light/dark/monochrome plus Catppuccin, Tokyo Night, Rosé Pine,
+- **Themes**: light/dark/monochrome plus Catppuccin, Tokyo Night, Rosé Pine,
   Gruvbox, Dracula, and more; `NO_COLOR` respected.
-- **`--json` scripting mode** — newline-delimited `StreamEvent` stream for
+- **`--json` scripting mode**: newline-delimited `StreamEvent` stream for
   scripts and benchmark harnesses; pipe stdin in, events out.
-- **Workspace jail** — file operations resolve to the configured workspace
+- **Workspace jail**: file operations resolve to the configured workspace
   root; path traversal and workspace-escaping shell commands are rejected.
-- **Zero-config boot** — `OPENAI_API_KEY` alone is enough to start; a
+- **Zero-config boot**: `OPENAI_API_KEY` alone is enough to start; a
   commented config template is written for you on first run.
-- **Single static binary** — pure-Go SQLite, CGO disabled, cross-compiles to
+- **Single static binary**: pure-Go SQLite, CGO disabled, cross-compiles to
   linux/darwin/windows/freebsd on amd64/arm64.
 
 ## Quick Start
@@ -87,7 +87,7 @@ compression:
 
 ### Install
 
-**Prebuilt binary** — via the install script:
+**Prebuilt binary**: via the install script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aetherbird/sandbar/main/install.sh | bash
@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/aetherbird/sandbar/main/install.sh 
 The script detects your platform, downloads the release archive, verifies it
 against the published sha256 checksums, and installs to `~/.local/bin`
 (override with `BIN_DIR`; pin a release with `SANDBAR_VERSION=v0.3.0`).
-Prebuilt binaries are not published yet — the install script and pinned
+Prebuilt binaries are not published yet, the install script and pinned
 versions will work once a goreleaser release ships (see
 [docs/RELEASE.md](docs/RELEASE.md)). Build from source or `go install` in
 the meantime.
@@ -113,30 +113,30 @@ make install      # installs to ~/.local/bin/sandbar
 `make build` stamps the binary with `git describe --tags --always --dirty`;
 run `sandbar version` to see it.
 
-**`go install`** — `go install github.com/aetherbird/sandbar/cmd/sandbar@latest`
+**`go install`**: `go install github.com/aetherbird/sandbar/cmd/sandbar@latest`
 installs the binary as `sandbar` (module root is the repo root); the binary
-reports the module version of the tag it was installed from — see
+reports the module version of the tag it was installed from; see
 `sandbar version`.
 
-**Homebrew / Scoop** — planned after the first release (tap and bucket
+**Homebrew / Scoop**: planned after the first release (tap and bucket
 generated by goreleaser).
 
 ## Configuration
 
-- **Config path** — first of: `--config <path>`, `$SANDBAR_CONFIG`,
+- **Config path**: first of: `--config <path>`, `$SANDBAR_CONFIG`,
   `$XDG_CONFIG_HOME/sandbar/config.yaml`, `~/.config/sandbar/config.yaml`,
   `/etc/sandbar/config.yaml`. The working directory is never searched.
-- **Env vars** — `SANDBAR_CONFIG` (config path), `SANDBAR_THEME` (theme
+- **Env vars**: `SANDBAR_CONFIG` (config path), `SANDBAR_THEME` (theme
   override); provider keys are interpolated into YAML as `${VAR}` (e.g.
   `${OPENROUTER_API_KEY}`, `${BRAVE_API_KEY}`). `OPENAI_API_KEY` alone boots
   the zero-config default.
-- **Client prefs** — `~/.config/sandbar/client.yaml` holds TUI-only
+- **Client prefs**: `~/.config/sandbar/client.yaml` holds TUI-only
   preferences (`default_model`, `theme`, `color_mode`, `font_size`,
-  `show_cost` — opt-in session-cost display), auto-created with
+  `show_cost`, opt-in session-cost display), auto-created with
   commented defaults on first run.
-- **Data** — the SQLite database lives under `~/.local/share/sandbar/`
+- **Data**: the SQLite database lives under `~/.local/share/sandbar/`
   (absolute `database:` values are honored as-is).
-- **models.json** — a legacy-style provider registry layered on top of
+- **models.json**: a legacy-style provider registry layered on top of
   config.yaml providers (see `models.json.example`). Sandbar looks for
   `models_json:` in the config, then `models.json` next to the loaded config
   file. Schema: `{"providers": {name: {baseUrl, api, apiKey, compat, models[]}}}`
@@ -158,24 +158,24 @@ generated by goreleaser).
 
 ### Skills & Templates
 
-- **Skills** — on-demand instruction packs discovered from
+- **Skills**: on-demand instruction packs discovered from
   `<workspace>/.sandbar/skills`, `.claude/skills`, and `.agents/skills`
   (then `~/.config/sandbar/skills`, `~/.claude/skills`, `~/.agents/skills`;
   earlier scopes shadow later ones by name). Each is a folder with a
   `SKILL.md` carrying a `description:` header; the system prompt advertises
   the list and the model reads the file only when relevant.
-- **Prompt templates** — markdown files in `<workspace>/.sandbar/prompts`
+- **Prompt templates**: markdown files in `<workspace>/.sandbar/prompts`
   or `~/.config/sandbar/prompts` become slash commands: `/name args`
   expands the body (`$1..$9`, `$@`/`$ARGUMENTS`, `${@}`, `${@:N}`,
   `${@:N:L}`) and submits it as your message. Registered commands win over
   same-named templates.
-- **Prompt files** — `SYSTEM.md` replaces the base persona instructions
+- **Prompt files**: `SYSTEM.md` replaces the base persona instructions
   (everything else in the prompt still assembles around it),
   `APPEND_SYSTEM.md` appends at the end, and `TITLE_SYSTEM.md` templates
   the session title from the first message (all support `{{cwd}}`,
   `{{date}}`; the title file also `{{message}}`, `{{firstLine}}`). Looked
   up per file in `<workspace>/.sandbar`, `.claude`, `.codex`, `.agents`,
-  then `~/.config/sandbar`, `~/.claude`, `~/.codex`, `~/.agents` — first
+  then `~/.config/sandbar`, `~/.claude`, `~/.codex`, `~/.agents`, first
   existing wins; no ancestor walk.
 
 ## Daily Use
@@ -200,12 +200,11 @@ generated by goreleaser).
 | `/theme` | Switch theme (picker or id) |
 | `/help` (`/?`) | Command reference |
 | `/quit` (`/q`, `/exit`) | Exit |
-| `! <command>` | Shell escape — run a command in the workspace |
+| `! <command>` | Shell escape, run a command in the workspace |
 | `@path` | Mention a file; its content is expanded into the message |
 
 **Editing.** `file_read` stamps every line with an 8-hex content hash; paste
-those hash-prefixed lines into `file_patch`'s `old_str` to anchor the edit —
-stale anchors are rejected with the current hashes instead of silently
+those hash-prefixed lines into `file_patch`'s `old_str` to anchor the edit; stale anchors are rejected with the current hashes instead of silently
 patching the wrong lines.
 
 Pipe input for one-shot use:
@@ -223,7 +222,7 @@ sandbar --json "list the failing tests" | jq -r 'select(.type=="token") | .conte
   you configure.
 - **Fail-closed approvals.** When approval policy requires a prompt but no
   interactive handler exists (headless/scripted runs), the tool call is
-  denied — never silently allowed.
+  denied, never silently allowed.
 - **Workspace jail.** File tools and dynamic shell commands are confined to
   the configured workspace; path traversal and workspace escapes are
   rejected. Note this is convenience hygiene, not a sandbox: the agent runs
@@ -270,7 +269,7 @@ system-prompt.md       default persona prompt
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT; see [LICENSE](LICENSE).
 
 ---
 
