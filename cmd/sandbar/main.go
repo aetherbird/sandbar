@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
@@ -24,6 +25,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 	"github.com/sashabaranov/go-openai"
 	"golang.org/x/term"
 
@@ -1277,16 +1280,87 @@ func (m *appModel) countVisualRows() int {
 	}
 	rows := 0
 	for _, ln := range strings.Split(m.ta.Value(), "\n") {
-		r := (lipgloss.Width(ln) + w - 1) / w
-		if r < 1 {
-			r = 1
-		}
-		rows += r
+		rows += wrapRowCount([]rune(ln), w)
 	}
 	if rows < 1 {
 		rows = 1
 	}
 	return rows
+}
+
+// wrapRowCount returns the number of visual rows the bubbles v2 textarea
+// renders for one logical line at the given wrap width. It mirrors the
+// textarea's private word-wrap exactly, including its trailing-space
+// accounting: a line that lands exactly on the wrap width spills an extra
+// (often space-only) row, and a line whose last word would sit flush against
+// the width is pushed onto a new row. A plain ceil(width/w) estimate misses
+// both cases, so clipTextarea used to trim a row the textarea actually drew —
+// the reported "typed characters disappear at the end of the 3rd/4th visual
+// line" bug. Keep this in lockstep with
+// charm.land/bubbles/v2/textarea.textarea.wrap.
+func wrapRowCount(line []rune, width int) int {
+	var (
+		lines  = [][]rune{{}}
+		word   = []rune{}
+		row    int
+		spaces int
+	)
+	for _, r := range line {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], repeatSpaces(spaces)...)
+				spaces = 0
+				word = nil
+			} else {
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], repeatSpaces(spaces)...)
+				spaces = 0
+				word = nil
+			}
+		} else {
+			// If the last character is a double-width rune, the word may not
+			// fit on this line even when it does not exceed the width.
+			lastCharLen := runewidth.RuneWidth(word[len(word)-1])
+			if uniseg.StringWidth(string(word))+lastCharLen > width {
+				// If the current line has content, the word fills it and
+				// moves to the next line.
+				if len(lines[row]) > 0 {
+					row++
+					lines = append(lines, []rune{})
+				}
+				lines[row] = append(lines[row], word...)
+				word = nil
+			}
+		}
+	}
+
+	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+		lines = append(lines, []rune{})
+		lines[row+1] = append(lines[row+1], word...)
+		spaces++
+		lines[row+1] = append(lines[row+1], repeatSpaces(spaces)...)
+	} else {
+		lines[row] = append(lines[row], word...)
+		spaces++
+		lines[row] = append(lines[row], repeatSpaces(spaces)...)
+	}
+
+	return len(lines)
+}
+
+// repeatSpaces mirrors the textarea's trailing-space padding (kept in sync
+// with wrapRowCount).
+func repeatSpaces(n int) []rune {
+	return []rune(strings.Repeat(" ", n))
 }
 
 // overflowIndicator renders a one-line muted hint when the input exceeds the
@@ -3610,10 +3684,21 @@ func popUp(n int) string {
 	return fmt.Sprintf("\033[%dA", n)
 }
 
-// clearBelow emits the ANSI erase-to-end-of-screen sequence, clearing
-// everything from the cursor position to the bottom of the terminal.
-func clearBelow() string {
-	return "\033[J"
+// eraseRows erases n display rows starting at the cursor's current row and
+// leaves the cursor at the start of the row after the last erased one. It
+// never touches rows beyond the n given, so it is safe to aim at the tail of
+// a replaced in-place rendering without clipping the input block below it.
+//
+// Erase-below (CSI J) must not be used to clear an in-place markdown
+// rendering: the input box and status bar live below the rendering, and
+// Bubble Tea's diff renderer repaints only rows whose content changed, so
+// rows erased out-of-band stay blank until the next keystroke (the reported
+// "typed text disappears while streaming" bug).
+func eraseRows(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("\033[2K\033[1B", n)
 }
 
 // flushGlamour renders the accumulated response text through glamour,
@@ -3638,13 +3723,32 @@ func (m *appModel) flushGlamour() tea.Cmd {
 		lines = 0
 	}
 
-	var prefix string
-	if m.lastRenderLines > 0 {
-		prefix = popUp(m.lastRenderLines) + clearBelow()
-	}
-
+	prefix := m.inPlacePrefix(m.lastRenderLines)
 	m.lastRenderLines = lines
+	// The trailing newline is load-bearing: the inline renderer turns it into
+	// an empty final row whose erase keeps the separating blank row clean and
+	// whose carriage return lands the cursor exactly on the frame's first row,
+	// where the renderer anchors the frame for its next repaint.
 	return tea.Printf("%s%s\n", prefix, prefixed)
+}
+
+// inPlacePrefix builds the ANSI prefix that clears the previous markdown
+// rendering before the new one replaces it. The inline renderer inserts the
+// new rendering's rows directly above the input block (and restores the frame
+// position), so the previous rendering's rows now sit just above those
+// inserted rows; erase exactly those rows so the replaced block can't leave a
+// stale copy behind. Nothing at or below the new block's rows is ever erased,
+// and the cursor ends where the new block begins, so the input box survives
+// every flush. Returns "" when there is no previous rendering to clear.
+func (m *appModel) inPlacePrefix(oldLines int) string {
+	if oldLines <= 0 {
+		return ""
+	}
+	// The previous rendering occupied oldLines rows with one separating blank
+	// row above the frame; after the renderer scrolls and reinserts rows for
+	// the new rendering, those oldLines+1 rows sit directly above the new
+	// block's rows. Erase them and land on the new block's first row.
+	return popUp(oldLines+1) + eraseRows(oldLines+1)
 }
 
 // printResponse renders the accumulated response text through glamour markdown
@@ -3652,11 +3756,14 @@ func (m *appModel) flushGlamour() tea.Cmd {
 func (m *appModel) printResponse() tea.Cmd {
 	text := string(m.responseBuf)
 	if text == "" {
-		// Clear any intermediate rendering that's still showing.
+		// Clear any intermediate rendering that's still showing: erase the
+		// block's rows plus its separating blank row, with the same trailing
+		// newline the full flush uses so the cursor lands on the frame's
+		// first row.
 		if m.lastRenderLines > 0 {
 			n := m.lastRenderLines
 			m.lastRenderLines = 0
-			return tea.Printf("%s", popUp(n)+clearBelow())
+			return tea.Printf("%s\n", popUp(n+1)+eraseRows(n+1))
 		}
 		return nil
 	}
@@ -3670,12 +3777,9 @@ func (m *appModel) printResponse() tea.Cmd {
 	prefixed := indentGlamourOutput(wrapForPrint(rendered, m.proseWidth()))
 	lines := strings.Count(prefixed, "\n") + 1
 
-	var prefix string
-	if m.lastRenderLines > 0 {
-		prefix = popUp(m.lastRenderLines) + clearBelow()
-	}
-
+	prefix := m.inPlacePrefix(m.lastRenderLines)
 	m.lastRenderLines = lines
+	// The trailing newline is load-bearing — see flushGlamour.
 	return tea.Printf("%s%s\n", prefix, prefixed)
 }
 
