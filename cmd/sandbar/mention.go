@@ -7,6 +7,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -148,15 +149,37 @@ func (m *appModel) acceptMention(sugg []string) {
 // mentionSuggestView renders the fuzzy picker popup shown above the input.
 func (m appModel) mentionSuggestView(sugg []string) string {
 	sel := m.clampedMentionSel(len(sugg))
+	// Fixed-height body (see pathSuggestView): the frame must not change
+	// height as the filter narrows, or the inline renderer burns stale popup
+	// rows into scrollback.
+	const maxShow = 10
+	start := 0
+	if sel > maxShow-1 {
+		start = sel - maxShow + 1
+	}
+	end := start + maxShow
+	if end > len(sugg) {
+		end = len(sugg)
+	}
 	var b strings.Builder
-	for i, path := range sugg {
+	shown := 0
+	for i := start; i < end; i++ {
+		path := sugg[i]
 		if i == sel {
 			b.WriteString(sty(cAccent).Render("  ▸ "+path) + "\n")
 		} else {
 			b.WriteString(sty(cMuted).Render("    "+path) + "\n")
 		}
+		shown++
 	}
-	b.WriteString(sty(cMuted).Render("    ↑↓ move · Tab/Enter accept · Esc dismiss"))
+	for ; shown < maxShow; shown++ {
+		b.WriteString("\n")
+	}
+	hint := "    ↑↓ move · Tab/Enter accept · Esc dismiss"
+	if hidden := len(sugg) - (end - start); hidden > 0 {
+		hint += fmt.Sprintf(" · %d more…", hidden)
+	}
+	b.WriteString(sty(cMuted).Render(hint))
 	return b.String()
 }
 

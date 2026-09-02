@@ -946,16 +946,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.slashSuggestions()) > 0 || m.slashDismissed {
 				m.slashDismissed = true // suppress until next text change
 				m.slashSel = 0
-				return m, nil
+				// Closing the popup shrinks the frame; repaint so the closed
+				// popup's rows are not left burned on screen.
+				return m, tea.ClearScreen
 			}
 			if len(m.mentionSuggestions()) > 0 || m.mentionDismissed {
 				m.mentionDismissed = true // suppress until next text change
 				m.mentionSel = 0
-				return m, nil
+				return m, tea.ClearScreen
 			}
 			if len(m.pathSuggestions()) > 0 || m.pathDismissed {
 				m.pathDismissed = true // suppress until next text change
-				return m, nil
+				return m, tea.ClearScreen
 			}
 			// Esc interrupts an active turn. Prefer the backend's interrupt
 			// endpoint (so the server cancels the turn too); always cancel the
@@ -1259,6 +1261,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Don't feed keys to the (hidden) input while a picker menu is open.
 	if m.pickMode == "" {
 		before := m.ta.Value()
+		hadPopup := m.anySuggestOpen()
 		pre := cursorSnap{value: before, row: m.ta.Line(), col: m.ta.Column()}
 		var taCmd tea.Cmd
 		m.ta, taCmd = m.ta.Update(msg)
@@ -1275,6 +1278,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mentionDismissed = false // re-enable mention popup on text change
 			// Clear draft when user types: the saved input is stale.
 			m.draft = ""
+		}
+		// Opening or closing a suggestion popup changes the frame height;
+		// the inline renderer leaves the transition's stale rows on screen
+		// (burned popup artifacts), so repaint cleanly once per transition.
+		if m.anySuggestOpen() != hadPopup {
+			cmds = append(cmds, tea.ClearScreen)
 		}
 		// The textarea uses a fixed viewport height; View() clips it.
 	}
@@ -2023,6 +2032,10 @@ func (m appModel) slashSuggestView(sugg []slashCommand) string {
 		end = len(sugg)
 	}
 	var b strings.Builder
+	// Fixed-height body (see pathSuggestView): the frame must not change
+	// height as the filter narrows, or the inline renderer burns stale popup
+	// rows into scrollback.
+	shown := 0
 	for i := start; i < end; i++ {
 		c := sugg[i]
 		name := fmt.Sprintf("%-12s", c.name)
@@ -2031,6 +2044,10 @@ func (m appModel) slashSuggestView(sugg []slashCommand) string {
 		} else {
 			b.WriteString("    " + sty(cLavender).Render(name) + "  " + sty(cMuted).Render(c.desc) + "\n")
 		}
+		shown++
+	}
+	for ; shown < maxSlashPopupRows; shown++ {
+		b.WriteString("\n")
 	}
 	hint := "    ↑↓ move · Tab complete · Enter run · Esc dismiss"
 	if hidden := len(sugg) - (end - start); hidden > 0 {
@@ -2132,6 +2149,10 @@ func (m appModel) pathSuggestView(sugg []string) string {
 		end = len(sugg)
 	}
 	var b strings.Builder
+	// The popup body is padded to a fixed row count: a variable-height popup
+	// changes the frame height on every keystroke filter, and the inline
+	// renderer leaves stale popup rows burned into scrollback at each change.
+	shown := 0
 	for i := start; i < end; i++ {
 		name := sugg[i]
 		if i == sel {
@@ -2139,11 +2160,16 @@ func (m appModel) pathSuggestView(sugg []string) string {
 		} else {
 			b.WriteString(sty(cMuted).Render("    "+name) + "\n")
 		}
+		shown++
 	}
-	if len(sugg) > maxShow {
-		b.WriteString(sty(cMuted).Render(fmt.Sprintf("    (%d more…)", len(sugg)-end)) + "\n")
+	for ; shown < maxShow; shown++ {
+		b.WriteString("\n")
 	}
-	b.WriteString(sty(cMuted).Render("    ↑↓ move · Tab/Enter complete · Esc dismiss"))
+	hint := "    ↑↓ move · Tab/Enter complete · Esc dismiss"
+	if hidden := len(sugg) - (end - start); hidden > 0 {
+		hint += fmt.Sprintf(" · %d more…", hidden)
+	}
+	b.WriteString(sty(cMuted).Render(hint))
 	return b.String()
 }
 
@@ -2156,6 +2182,12 @@ func (m *appModel) completePath(sugg []string) {
 		return
 	}
 	m.fillPathWord(sugg[sel])
+}
+
+// anySuggestOpen reports whether any inline suggestion popup (slash command,
+// @-mention, path completion) is currently showing.
+func (m appModel) anySuggestOpen() bool {
+	return len(m.slashSuggestions()) > 0 || len(m.mentionSuggestions()) > 0 || len(m.pathSuggestions()) > 0
 }
 
 // tabCompletePath completes the current path word like bash (Tab): a single
