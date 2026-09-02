@@ -208,6 +208,24 @@ var builtinPalettes = mustCatalog([]Palette{
 		Border1: "#d0d7de", Border2: "#afb8c1",
 		Accent: "#0969da", AccentSoft: "rgba(9, 105, 218, 0.1)", AccentFG: "#ffffff",
 	}),
+	// Aetherwind (github.com/aetherbird/aetherwind): cyan is the interactive
+	// color (selection, search, menus), so it carries the accent. Surfaces
+	// follow the theme's bg/bg-2/ui ramp; state colors are its green/yellow/
+	// red pairs (400-level on dark, 600-level on light).
+	palette("aetherwind-dark", "Aetherwind Dark", "Aetherwind", SchemeDark, Tokens{
+		Surface0: "#080110", Surface1: "#4b4a6a", Surface2: "#585776", Surface3: "#646381",
+		Text1: "#fdfafd", Text2: "#a7a5b0", Text3: "#878693",
+		Border1: "#585776", Border2: "#706e9c",
+		Accent: "#6ad9bf", AccentSoft: "rgba(106, 217, 191, 0.15)", AccentFG: "#080110",
+		Success: "#879a39", Warning: "#d0a215", Danger: "#d14d41",
+	}),
+	palette("aetherwind-light", "Aetherwind Light", "Aetherwind", SchemeLight, Tokens{
+		Surface0: "#fffcf0", Surface1: "#ffffff", Surface2: "#fdfafd", Surface3: "#f9fafb",
+		Text1: "#080110", Text2: "#9f9eb9", Text3: "#d7d5dc",
+		Border1: "#d7d5dc", Border2: "#9f9eb9",
+		Accent: "#54b3ab", AccentSoft: "rgba(84, 179, 171, 0.12)", AccentFG: "#fffcf0",
+		Success: "#66800b", Warning: "#ad8301", Danger: "#af3029",
+	}),
 })
 
 var builtinByID = indexCatalog(builtinPalettes)

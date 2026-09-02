@@ -15,12 +15,13 @@ func TestCatalogContainsEveryWebPalette(t *testing.T) {
 		"gruvbox-dark", "gruvbox-light",
 		"dracula", "one-dark", "everforest", "kanagawa-wave",
 		"solarized-dark", "nord", "synthwave", "github-light",
+		"aetherwind-dark", "aetherwind-light",
 	}
 	if got := IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("theme IDs differ:\n got: %q\nwant: %q", got, want)
 	}
-	if got := len(List()); got != 21 {
-		t.Fatalf("List returned %d palettes, want 21", got)
+	if got := len(List()); got != 23 {
+		t.Fatalf("List returned %d palettes, want 23", got)
 	}
 	if err := ValidateCatalog(List()); err != nil {
 		t.Fatalf("built-in catalog is invalid: %v", err)
