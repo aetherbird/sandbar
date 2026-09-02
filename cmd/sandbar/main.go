@@ -230,7 +230,7 @@ type appModel struct {
 	styles    *styleSet // immutable; swapped atomically as one unit by /theme
 	ta        textarea.Model
 	width     int
-	height    int // terminal rows; bounds printLine chunk sizes
+	height    int           // terminal rows; bounds printLine chunk sizes
 	turnStart time.Time     // when the current/last request began streaming
 	turnDur   time.Duration // frozen duration of the last completed request
 	ctxUsed   int
