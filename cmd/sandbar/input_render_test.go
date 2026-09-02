@@ -1,6 +1,6 @@
 package main
 
-// Regression tests for the two reported TUI input rendering bugs:
+// Regression tests for reported TUI input/streaming rendering bugs:
 //
 //   - Bug B: characters typed near the end of a visual line of the input box
 //     vanished until more typing happened. The app clips the textarea's
@@ -11,17 +11,20 @@ package main
 //     characters (and the cursor). TestTypedCharsVisibleAtWrapBoundaries pins
 //     the fix: the clip must follow the textarea's own wrap.
 //
-//   - Bug A: while assistant text streamed, text typed into the input box
-//     visibly disappeared. The tick-driven in-place markdown re-render used
-//     erase-to-end-of-screen (CSI J), which wiped the input box and status bar
-//     below the block; Bubble Tea's diff renderer repaints only rows whose
-//     content changed, so the typed text stayed invisible until the next
-//     keystroke. TestTypedTextSurvivesStreamingFlush pins the fix: the flush
-//     payload must erase exactly the previous rendering's rows and never touch
-//     anything below the block.
+//   - Bug A: while assistant text streamed, the display desynced — streamed
+//     tokens erased as they printed, blank blocks opened, and the input box
+//     could vanish. The progressive markdown re-render replaced its previous
+//     printing in place with cursor-up/erase escapes embedded in tea.Printf
+//     bodies; bubbletea v2's cursed renderer wraps printf bodies in its own
+//     scroll/insert program and tracks a screen model those escapes corrupt,
+//     so erased rows were never repainted. The fix renders the streaming
+//     markdown inside the View frame (live block) and commits it with one
+//     plain printLine at turn end. TestTypedTextSurvivesStreamingFlush pins
+//     the contract: ticks emit no printf surgery (no cursor-movement escapes
+//     in any printf body), the live block carries the streamed text in the
+//     View, and the commit prints the full response exactly once.
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,36 +55,235 @@ func isPrintfMsg(msg tea.Msg) (string, bool) {
 	return f.String(), true
 }
 
-// batchFirstPrintfBody evaluates a command (walking Batch/Sequence
-// containers) and returns the body of the first tea.Printf it finds — the
-// bytes the inline renderer writes to the terminal.
-func batchFirstPrintfBody(t *testing.T, cmd tea.Cmd) string {
+// batchPrintfBodies evaluates a command (walking Batch/Sequence containers)
+// and returns the bodies of every tea.Printf it contains — the bytes the
+// inline renderer would write to the terminal. Commands that block (e.g.
+// waitForStreamItem parking on the stream channel) are skipped via a short
+// execution timeout; their goroutine leaks for the remainder of the test
+// binary's life, which is harmless here.
+func batchPrintfBodies(t *testing.T, cmd tea.Cmd) []string {
 	t.Helper()
-	if cmd == nil {
-		return ""
-	}
-	msg := cmd()
-	if body, ok := isPrintfMsg(msg); ok {
-		return body
-	}
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, nested := range batch {
-			if body := batchFirstPrintfBody(t, nested); body != "" {
-				return body
-			}
+	var out []string
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
 		}
-		return ""
-	}
-	if v := reflect.ValueOf(msg); v.IsValid() && v.Kind() == reflect.Slice {
-		for i := 0; i < v.Len(); i++ {
-			if nested, ok := v.Index(i).Interface().(tea.Cmd); ok {
-				if body := batchFirstPrintfBody(t, nested); body != "" {
-					return body
+		msg, ok := cmdMsgWithTimeout(c, time.Second)
+		if !ok {
+			return // blocking cmd — never a printf
+		}
+		if body, ok := isPrintfMsg(msg); ok {
+			out = append(out, body)
+			return
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, nested := range batch {
+				walk(nested)
+			}
+			return
+		}
+		if v := reflect.ValueOf(msg); v.IsValid() && v.Kind() == reflect.Slice {
+			for i := 0; i < v.Len(); i++ {
+				if nested, ok := v.Index(i).Interface().(tea.Cmd); ok {
+					walk(nested)
 				}
 			}
 		}
 	}
-	return ""
+	walk(cmd)
+	return out
+}
+
+// cmdMsgWithTimeout executes cmd, returning its message; ok=false when the
+// command does not finish within d (treated as a blocking command).
+func cmdMsgWithTimeout(cmd tea.Cmd, d time.Duration) (tea.Msg, bool) {
+	type result struct{ msg tea.Msg }
+	ch := make(chan result, 1)
+	go func() { ch <- result{cmd()} }()
+	select {
+	case r := <-ch:
+		return r.msg, true
+	case <-time.After(d):
+		return nil, false
+	}
+}
+
+// cursorEscapes are the sequences that corrupt the cursed renderer's screen
+// model when embedded in printf bodies: they move/erase the terminal cursor
+// out-of-band, so rows they blank are never repainted (drift, vanishing
+// streamed text). No printf body may contain them.
+var cursorEscapes = []string{"\x1b[A", "\x1b[2K", "\x1b[1B", "\x1b[J"}
+
+func assertNoCursorEscapes(t *testing.T, step string, bodies []string) {
+	t.Helper()
+	for _, body := range bodies {
+		for _, esc := range cursorEscapes {
+			if strings.Contains(body, esc) {
+				t.Fatalf("after %s: printf body contains cursor escape %q (renderer desync):\n%q", step, esc, body)
+			}
+		}
+	}
+}
+
+// newLiveStreamModel returns a model mid-stream in a tool-less turn, with the
+// label seen and the given tokens accumulated, ready for tick/commit tests.
+func newLiveStreamModel(t *testing.T, tokens string) appModel {
+	t.Helper()
+	m := newModel(&session{modelAlias: "m"})
+	m.width = 80
+	m.streamGen = 1
+	m.streamCh = make(chan streamItem)
+	m.streaming = true
+	m.hadToolTurn = false
+
+	upd, _ := m.Update(streamItem{gen: 1, kind: "label", content: "label"})
+	m = upd.(appModel)
+	if !m.liveLabel {
+		t.Fatal("label item did not arm the live block")
+	}
+	upd, _ = m.Update(streamItem{gen: 1, kind: "token", content: tokens})
+	m = upd.(appModel)
+	return m
+}
+
+// TestTypedTextSurvivesStreamingFlush interleaves stream tokens, spinner
+// ticks, and keystrokes exactly as the live session does. The progressive
+// rendering must live in the View frame (never a printf), and no printf body
+// may carry cursor-movement escapes — the class of payload that desynced the
+// renderer and erased streamed tokens as they printed.
+func TestTypedTextSurvivesStreamingFlush(t *testing.T) {
+	m := newLiveStreamModel(t, strings.Repeat("hello ", 20))
+
+	// The user types while the stream is live.
+	typeTestKey(t, &m, "Z")
+
+	// View before any tick: label armed, text not rendered yet — but typed
+	// input must be visible regardless.
+	if !strings.Contains(stripANSI(m.View().Content), "Z") {
+		t.Fatalf("typed text missing from View:\n%s", stripANSI(m.View().Content))
+	}
+
+	// First tick refreshes the live block in-frame. It must not print.
+	upd, cmd := m.Update(tickMsg(time.Now()))
+	m = upd.(appModel)
+	if cmd == nil {
+		t.Fatal("streaming tick produced no command")
+	}
+	assertNoCursorEscapes(t, "first tick", batchPrintfBodies(t, cmd))
+	view := stripANSI(m.View().Content)
+	if !strings.Contains(view, "◈ sandbar") {
+		t.Fatalf("live block label missing from View:\n%s", view)
+	}
+	if !strings.Contains(view, "hello") {
+		t.Fatalf("streamed text missing from live block:\n%s", view)
+	}
+	if !strings.Contains(view, "Z") {
+		t.Fatalf("typed text missing from View after tick:\n%s", view)
+	}
+
+	// More tokens arrive; the block grows in-frame, still without printing.
+	upd, _ = m.Update(streamItem{gen: 1, kind: "token", content: strings.Repeat("world ", 60)})
+	m = upd.(appModel)
+	upd, cmd = m.Update(tickMsg(time.Now()))
+	m = upd.(appModel)
+	assertNoCursorEscapes(t, "growing tick", batchPrintfBodies(t, cmd))
+	if view = stripANSI(m.View().Content); !strings.Contains(view, "world") {
+		t.Fatalf("grown stream missing from live block:\n%s", view)
+	}
+	if !strings.Contains(view, "Z") {
+		t.Fatalf("typed text missing from View after growing tick:\n%s", view)
+	}
+	if !m.streaming {
+		t.Fatal("tick lost streaming state")
+	}
+
+	// Commit (turn end): one plain printLine of label + full text, and the
+	// live block leaves the frame.
+	commit := m.printResponse()
+	if commit == nil {
+		t.Fatal("commit produced no print")
+	}
+	bodies := batchPrintfBodies(t, commit)
+	if len(bodies) != 1 {
+		t.Fatalf("commit produced %d printfs, want exactly 1: %q", len(bodies), bodies)
+	}
+	assertNoCursorEscapes(t, "commit", bodies)
+	joined := stripANSI(strings.Join(bodies, ""))
+	for _, want := range []string{"◈ sandbar", "hello", "world"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("commit missing %q:\n%s", want, joined)
+		}
+	}
+	if view = stripANSI(m.View().Content); strings.Contains(view, "hello") {
+		t.Fatalf("live block still showing after commit:\n%s", view)
+	}
+	if m.liveLabel || m.liveRendered != "" {
+		t.Fatal("live state not cleared by commit")
+	}
+}
+
+// TestToolArrivalCommitsLiveBlock pins the text-then-tools transition: the
+// first tool item commits the live block to the transcript exactly once and
+// drains tokBuf, so the inline flush cannot print the same text twice.
+func TestToolArrivalCommitsLiveBlock(t *testing.T) {
+	m := newLiveStreamModel(t, "answer preamble before tools ")
+
+	upd, cmd := m.Update(tickMsg(time.Now()))
+	m = upd.(appModel)
+	_ = cmd
+	if !strings.Contains(stripANSI(m.View().Content), "preamble") {
+		t.Fatal("live block not showing before tool arrival")
+	}
+
+	upd, cmd = m.Update(streamItem{gen: 1, kind: "tool", toolName: "file_read", content: "⚙ file_read: x.go"})
+	m = upd.(appModel)
+	bodies := batchPrintfBodies(t, cmd)
+	assertNoCursorEscapes(t, "tool arrival", bodies)
+	count := strings.Count(stripANSI(strings.Join(bodies, "")), "preamble")
+	if count != 1 {
+		t.Fatalf("committed text printed %d times, want exactly 1: %q", count, bodies)
+	}
+	if m.liveLabel || m.liveRendered != "" {
+		t.Fatal("live state survived tool arrival")
+	}
+	if len(m.tokBuf) != 0 {
+		t.Fatalf("tokBuf not drained on commit: %q", m.tokBuf)
+	}
+	if !m.hadToolTurn {
+		t.Fatal("tool arrival did not mark the turn")
+	}
+	if view := stripANSI(m.View().Content); strings.Contains(view, "preamble") {
+		t.Fatalf("live block still in frame after tool arrival:\n%s", view)
+	}
+}
+
+// TestEscInterruptCommitsPartialResponse pins the interrupt path: interrupting
+// a text-only turn commits the partial response, because the stream's terminal
+// item arrives stale and never prints.
+func TestEscInterruptCommitsPartialResponse(t *testing.T) {
+	m := newLiveStreamModel(t, "partial wisdom ")
+	upd, cmd := m.Update(tickMsg(time.Now()))
+	m = upd.(appModel)
+	_ = cmd
+
+	// The interrupt guard requires an active cancel handle (normally armed by
+	// launchStreamGoroutine).
+	m.cancel = func() {}
+
+	upd, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = upd.(appModel)
+	if cmd == nil {
+		t.Fatal("interrupt produced no command")
+	}
+	bodies := batchPrintfBodies(t, cmd)
+	assertNoCursorEscapes(t, "interrupt", bodies)
+	if !strings.Contains(stripANSI(strings.Join(bodies, "")), "partial wisdom") {
+		t.Fatalf("interrupt dropped the partial response: %q", bodies)
+	}
+	if m.liveLabel || m.liveRendered != "" {
+		t.Fatal("live state survived interrupt")
+	}
 }
 
 // TestTypedCharsVisibleAtWrapBoundaries reproduces Bug B: with the old clip
@@ -152,103 +354,4 @@ func TestTypedCharsVisibleAtWrapBoundaries(t *testing.T) {
 			t.Fatalf("boundary word %q missing from View (value=%q):\n%s", want, m3.ta.Value(), view)
 		}
 	}
-}
-
-// TestTypedTextSurvivesStreamingFlush reproduces Bug A: interleave stream
-// tokens, spinner ticks, and keystrokes exactly as the live session does, and
-// assert the typed text stays visible in the View after every step while the
-// flush payload never erases anything below the markdown block.
-func TestTypedTextSurvivesStreamingFlush(t *testing.T) {
-	m := newModel(&session{modelAlias: "m"})
-	m.width = 80
-	m.streamGen = 1
-	m.streamCh = make(chan streamItem)
-	m.streaming = true
-	m.hadToolTurn = false
-
-	assertTypedVisible := func(step string) {
-		t.Helper()
-		if !strings.Contains(stripANSI(m.View().Content), "Z") {
-			t.Fatalf("after %s: typed text missing from View:\n%s", step, stripANSI(m.View().Content))
-		}
-	}
-
-	// Token accumulation (the streaming goroutine's output).
-	upd, _ := m.Update(streamItem{gen: 1, kind: "token", content: strings.Repeat("hello ", 20)})
-	m = upd.(appModel)
-
-	// The user types while the stream is live.
-	typeTestKey(t, &m, "Z")
-	assertTypedVisible("typing during stream")
-
-	// First tick flush: no previous rendering yet, so no repositioning at all.
-	upd, cmd := m.Update(tickMsg(time.Now()))
-	m = upd.(appModel)
-	if cmd == nil {
-		t.Fatal("streaming tick produced no command")
-	}
-	if body := batchFirstPrintfBody(t, cmd); body == "" || strings.Contains(body, "\033[J") {
-		t.Fatalf("first flush payload must be plain block text with no erase-below, got %q", body)
-	}
-	assertTypedVisible("first flush")
-
-	// More tokens arrive; the block grows.
-	upd, _ = m.Update(streamItem{gen: 1, kind: "token", content: strings.Repeat("world ", 60)})
-	m = upd.(appModel)
-
-	// Second tick flush: replaces the previous rendering in place. It must
-	// erase exactly the previous block's rows (plus its separating blank row)
-	// and never emit erase-below (CSI J), which would wipe the input box and
-	// status bar that live under the block.
-	oldLines := m.lastRenderLines
-	upd, cmd = m.Update(tickMsg(time.Now()))
-	m = upd.(appModel)
-	if cmd == nil {
-		t.Fatal("streaming tick produced no command")
-	}
-	body := batchFirstPrintfBody(t, cmd)
-	if body == "" {
-		t.Fatal("growing flush produced no payload")
-	}
-	if strings.Contains(body, "\033[J") {
-		t.Fatalf("flush payload contains erase-below (erases the input box): %q", body)
-	}
-	wantPrefix := fmt.Sprintf("\033[%dA", oldLines+1) + strings.Repeat("\033[2K\033[1B", oldLines+1)
-	if !strings.HasPrefix(body, wantPrefix) {
-		t.Fatalf("flush prefix = %q, want scoped erase of exactly the old block %q", body[:min(len(body), 48)], wantPrefix)
-	}
-	// The payload is the block plus one trailing newline: the inline renderer
-	// inserts exactly that many rows above the frame and the final cursor
-	// lands on the frame's first row, where the renderer anchors the repaint.
-	if !strings.HasSuffix(body, "\n") {
-		t.Fatalf("flush payload must end with a newline (frame anchor), got %q", body[len(body)-8:])
-	}
-	if got := strings.Count(strings.TrimSuffix(body, "\n"), "\n") + 1; got != m.lastRenderLines {
-		t.Fatalf("flush payload block lines = %d, want %d", got, m.lastRenderLines)
-	}
-	assertTypedVisible("growing flush")
-
-	// A shrinking flush (shorter reflowed block) must also stay scoped.
-	m.responseBuf = []byte("tiny")
-	oldLines = m.lastRenderLines
-	upd, cmd = m.Update(tickMsg(time.Now()))
-	m = upd.(appModel)
-	body = batchFirstPrintfBody(t, cmd)
-	if strings.Contains(body, "\033[J") {
-		t.Fatalf("shrinking flush payload contains erase-below: %q", body)
-	}
-	wantPrefix = fmt.Sprintf("\033[%dA", oldLines+1) + strings.Repeat("\033[2K\033[1B", oldLines+1)
-	if !strings.HasPrefix(body, wantPrefix) {
-		t.Fatalf("shrinking flush prefix = %q, want %q", body[:min(len(body), 48)], wantPrefix)
-	}
-	assertTypedVisible("shrinking flush")
-
-	// Ticks keep firing while the user types: the streaming tick re-arms
-	// itself, so the flush path above is what runs between keystrokes.
-	upd, cmd = m.Update(tickMsg(time.Now()))
-	m = upd.(appModel)
-	if cmd == nil || !m.streaming {
-		t.Fatal("streaming tick did not re-arm")
-	}
-	assertTypedVisible("tick while typing")
 }

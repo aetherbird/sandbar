@@ -41,7 +41,8 @@ var slashCommands []slashCommand
 func init() {
 	slashCommands = []slashCommand{
 		{name: "/model", desc: "switch model (menu)", run: func(m *appModel, _ slashInvocation) tea.Cmd { return m.openProviderPicker() }},
-		{name: "/effort", desc: "set reasoning effort: low | medium | high | default", run: runEffortCommand},
+		{name: "/effort", desc: "set reasoning effort (menu: default | low | medium | high | tropical)", run: runEffortCommand},
+		{name: "/tropical", desc: "toggle TROPICAL mode — max effort + heavy subagent parallelism", run: runTropicalCommand},
 		{name: "/plan", desc: "toggle plan mode (read-only turns that produce a plan)", run: runPlanCommand},
 		{name: "/theme", desc: "switch CLI theme (menu or id)", run: runThemeCommand},
 		{name: "/sessions", desc: "list & resume past sessions", run: func(m *appModel, _ slashInvocation) tea.Cmd { return m.openSessionPicker() }},
@@ -72,24 +73,28 @@ func runThemeCommand(m *appModel, in slashInvocation) tea.Cmd {
 }
 
 func runEffortCommand(m *appModel, in slashInvocation) tea.Cmd {
-	usage := "usage: /effort low | medium | high | default"
+	usage := "usage: /effort low | medium | high | tropical | default"
 	if len(in.args) == 0 {
-		current := m.sess.effort
-		if current == "" {
-			current = "default (provider decides)"
-		}
-		return m.printLine("\n  effort: " + current + "\n  " + usage + "\n")
+		return m.openEffortPicker()
 	}
 	switch in.args[0] {
 	case "low", "medium", "high":
+		m.sess.tropical = false
 		m.sess.effort = in.args[0]
 		return m.printLine("\n" + sty(cAccent).Render("  ◈ effort set to "+in.args[0]+" (applies from the next message)") + "\n")
+	case "tropical":
+		return m.setTropical(!m.sess.tropical)
 	case "default", "off", "none":
+		m.sess.tropical = false
 		m.sess.effort = ""
 		return m.printLine("\n" + sty(cAccent).Render("  ◈ effort reset to provider default") + "\n")
 	default:
 		return m.printLine("\n  unknown effort " + in.args[0] + "\n  " + usage + "\n")
 	}
+}
+
+func runTropicalCommand(m *appModel, _ slashInvocation) tea.Cmd {
+	return m.setTropical(!m.sess.tropical)
 }
 
 func runPlanCommand(m *appModel, _ slashInvocation) tea.Cmd {

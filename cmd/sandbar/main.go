@@ -205,6 +205,10 @@ type session struct {
 	// effort is the per-turn reasoning effort ("" = provider default),
 	// settable at launch with --effort and per session with /effort.
 	effort string
+	// tropical is the Tropical-mode adaptation of other harnesses' "ultracode"
+	// tier: effort is forced to high and the system prompt directs heavy
+	// parallel subagent use. Toggled with /tropical or the /effort menu.
+	tropical bool
 	// planMode makes the next turn read-only with a planning directive,
 	// settable at launch with --plan and toggled with /plan.
 	planMode bool
@@ -226,6 +230,7 @@ type appModel struct {
 	styles    *styleSet // immutable; swapped atomically as one unit by /theme
 	ta        textarea.Model
 	width     int
+	height    int // terminal rows; bounds printLine chunk sizes
 	turnStart time.Time     // when the current/last request began streaming
 	turnDur   time.Duration // frozen duration of the last completed request
 	ctxUsed   int
@@ -345,9 +350,22 @@ type appModel struct {
 	// (assistant text, diffs, labels, a new turn) resets it.
 	lastToolName string
 
-	// lastRenderLines tracks how many lines the last markdown rendering
-	// occupied, so the next render can overwrite it in place.
-	lastRenderLines int
+	// liveLabel/liveRendered back the in-frame streaming block: the assistant
+	// label and the latest glamour rendering of responseBuf. The block is part
+	// of the View frame, so the renderer owns all cursor movement; it is
+	// committed to the transcript with one printLine when the turn ends (or
+	// the first tool call arrives). The previous design replaced the printed
+	// rendering in place with cursor/erase escapes embedded in tea.Printf
+	// bodies, which bubbletea v2's cursed renderer executes at its own
+	// scroll/insert anchors — desyncing the screen (blank blocks, text
+	// stranded below the input box, streamed tokens erasing as they printed).
+	liveLabel    bool
+	liveRendered string
+	liveDirty    bool
+	// thinking is true while the model is in a reasoning phase. It drives the
+	// animated in-frame indicator (thinkingView) — transient, never printed
+	// to the transcript; any non-thinking stream event ends the phase.
+	thinking bool
 
 	// Active delegated tasks are rendered as a bounded live HUD above the
 	// editor. Terminal tasks are removed and summarized by the surrounding
@@ -431,6 +449,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		prevWidth := m.width
 		m.width = msg.Width
+		m.height = msg.Height
 		// Subtract prompt width (2 chars for "> ") so wrapped text doesn't
 		// overflow the terminal's right edge.
 		taWidth := msg.Width - 2
@@ -456,13 +475,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming {
 			m.spinIdx++
 			interval = 120 * time.Millisecond
-			if !m.hadToolTurn {
-				// Progressive glamour render: accumulate into responseBuf,
-				// then render the full buffer and replace the previous
-				// rendering in-place with ANSI escape codes.
-				if len(m.responseBuf) > 0 {
-					cmds = append(cmds, m.flushGlamour())
-				}
+			if !m.hadToolTurn && len(m.responseBuf) > 0 {
+				// Progressive markdown: re-render the buffer into the
+				// in-frame live block. No tea.Printf — the renderer repaints
+				// the frame itself, so nothing can drift.
+				m.refreshLiveRender()
 			}
 		}
 		cmds = append(cmds, tea.Tick(interval, func(t time.Time) tea.Msg { return tickMsg(t) }))
@@ -546,20 +563,43 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		// Any non-thinking event ends a reasoning phase; the "thinking" case
+		// below re-arms it.
+		if msg.kind != "thinking" {
+			m.thinking = false
+		}
 		switch msg.kind {
+		case "thinking":
+			m.thinking = true
+			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
+
 		case "token":
 			if msg.content != "" {
 				m.tokBuf = append(m.tokBuf, msg.content...)
 				m.responseBuf = append(m.responseBuf, msg.content...)
 				m.lastResponseRaw = string(m.responseBuf)
+				m.liveDirty = true // next spinner tick re-renders the live block
 			}
 			// keep accumulating — do NOT tea.Printf per token
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
-		case "label", "activity":
+		case "label":
+			// The assistant label heads the live block for a text-only turn;
+			// after tool calls have started printing inline, it joins them.
+			if m.hadToolTurn {
+				if msg.content != "" {
+					m.lastToolName = ""
+					cmds = append(cmds, m.printLine("\n"+msg.content))
+				}
+			} else {
+				m.liveLabel = true
+			}
+			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
+
+		case "activity":
 			// Presentation-only rows do not turn a plain response into a tool
-			// response. In particular, the first assistant label and coalesced
-			// thinking/retry notices must leave progressive Markdown enabled.
+			// response. In particular, coalesced thinking/retry notices must
+			// leave progressive Markdown enabled.
 			if msg.content != "" {
 				m.lastToolName = ""
 				cmds = append(cmds, m.printLine("\n"+msg.content))
@@ -567,6 +607,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
 		case "tool", "result", "diff":
+			// Prints within one stream item must never interleave: Bubble Tea
+			// batches commands concurrently, and a footer or tool line landing
+			// between the chunks of a multi-chunk commit splices the frame into
+			// the middle of the text. Everything this item prints runs as one
+			// ordered Sequence.
+			var turnPrints []tea.Cmd
+			if !m.hadToolTurn && (m.liveLabel || m.liveRendered != "") {
+				// Text streamed before the first tool call: commit the live
+				// block to the transcript, and drain tokBuf so the flush
+				// below does not print the same text a second time.
+				if cmd := m.printResponse(); cmd != nil {
+					turnPrints = append(turnPrints, cmd)
+				}
+				m.tokBuf = m.tokBuf[:0]
+			}
 			m.hadToolTurn = true
 			if msg.todoSet {
 				// Adopt the latest todo list into the sticky panel. todoRows is
@@ -575,7 +630,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			flushed := m.flushTokens(true)
 			if flushed != nil {
-				cmds = append(cmds, flushed)
+				turnPrints = append(turnPrints, flushed)
 				// Assistant text between tool calls breaks the run: the next
 				// tool line opens a new block with a blank line above.
 				m.lastToolName = ""
@@ -589,25 +644,27 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch msg.kind {
 				case "diff":
 					m.lastToolName = ""
-					cmds = append(cmds, m.printLine(msg.content))
+					turnPrints = append(turnPrints, m.printLine(msg.content))
 				case "result":
 					m.lastToolName = ""
-					cmds = append(cmds, m.printLine("  "+msg.content))
+					turnPrints = append(turnPrints, m.printLine("  "+msg.content))
 				default:
 					prefix := "\n"
 					if msg.toolName != "" && msg.toolName == m.lastToolName {
 						prefix = ""
 					}
-					printCmd := m.printLine(prefix + msg.content)
-					if msg.repaintAfter {
-						// Compression summary lines: force a clean repaint after
-						// printing so any inline-renderer drift cannot leave the
-						// bottom block (input + status bar) drawn off-position.
-						printCmd = tea.Sequence(printCmd, tea.ClearScreen)
-					}
-					cmds = append(cmds, printCmd)
+					turnPrints = append(turnPrints, m.printLine(prefix+msg.content))
 					m.lastToolName = msg.toolName
 				}
+			}
+			if len(turnPrints) > 0 {
+				if msg.repaintAfter {
+					// Compression summary lines: force a clean repaint after
+					// printing so any inline-renderer drift cannot leave the
+					// bottom block (input + status bar) drawn off-position.
+					turnPrints = append(turnPrints, tea.ClearScreen)
+				}
+				cmds = append(cmds, tea.Sequence(turnPrints...))
 			}
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
@@ -662,16 +719,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastToolName = ""
 			m.clearSubagentHUD()
 			m.clearApprovals("turn completed")
+			// Turn-end prints run as one ordered Sequence: the commit may be a
+			// multi-chunk payload, and a footer (or any concurrent print) landing
+			// between its chunks splices the frame into the middle of the text.
+			var turnEnd []tea.Cmd
 			if m.hadToolTurn {
 				// Tool calls occurred — text was printed inline.
 				if cmd := m.flushTokens(true); cmd != nil {
-					cmds = append(cmds, cmd)
+					turnEnd = append(turnEnd, cmd)
 				}
 			} else {
 				// Pure text response — render through glamour markdown.
-				cmds = append(cmds, m.printResponse())
+				turnEnd = append(turnEnd, m.printResponse())
 			}
-			cmds = append(cmds, m.printLine("\n"+msg.footer))
+			turnEnd = append(turnEnd, m.printLine("\n"+msg.footer))
+			cmds = append(cmds, tea.Sequence(turnEnd...))
 			cmds = append(cmds, m.contextCmd())
 			if m.sess.planMode {
 				// A plan turn just completed: the server marked the thread
@@ -905,7 +967,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					intCancel()
 				}
 				m.cancel()
-				if cmd := m.flushTokens(true); cmd != nil {
+				// Commit whatever the interrupted turn produced: the live
+				// block for a text-only turn, buffered plain text for a tool
+				// turn. The stream's terminal item arrives with a stale gen
+				// and does not print, so this is the only chance.
+				if m.hadToolTurn {
+					if cmd := m.flushTokens(true); cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+				} else if cmd := m.printResponse(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				m.drainingGen = m.streamGen
@@ -1248,6 +1318,19 @@ func (m appModel) View() tea.View {
 	if dv := m.dockedPanelsView(); dv != "" {
 		mid = dv + "\n" + mid
 	}
+	// Live area at the top of the frame — animated thinking indicator over
+	// the progressive markdown block — so both repaint as plain frame content,
+	// with no out-of-band cursor surgery.
+	var live []string
+	if tv := m.thinkingView(); tv != "" {
+		live = append(live, tv)
+	}
+	if lb := m.liveBlockView(); lb != "" {
+		live = append(live, lb)
+	}
+	if len(live) > 0 {
+		mid = strings.Join(live, "\n") + "\n" + mid
+	}
 	return tea.NewView(fmt.Sprintf("%s\n%s\n%s\n%s", div, mid, div, stat))
 }
 
@@ -1490,7 +1573,10 @@ func (m *appModel) startStream(v string, cmds []tea.Cmd) []tea.Cmd {
 	m.responseBuf = m.responseBuf[:0]
 	m.lastResponseRaw = ""
 	m.hadToolTurn = false
-	m.lastRenderLines = 0
+	m.liveLabel = false
+	m.liveRendered = ""
+	m.liveDirty = false
+	m.thinking = false
 	m.launchStreamGoroutine(v, ch)                          // starts goroutine, returns immediately
 	return append(cmds, waitForStreamItem(ch, m.streamGen)) // start the read pump
 }
@@ -1553,7 +1639,13 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 			ch <- streamItem{kind: "err", err: errors.New("CLI backend is not configured")}
 			return
 		}
-		events, err := streamBackend.SendMessage(ctx, threadID, modelAlias, input, m.sess.effort, m.sess.planMode)
+		// Tropical mode travels as the effort string; the agent maps it to
+		// high effort plus the heavy-subagent system directive.
+		effort := m.sess.effort
+		if m.sess.tropical {
+			effort = "tropical"
+		}
+		events, err := streamBackend.SendMessage(ctx, threadID, modelAlias, input, effort, m.sess.planMode)
 		if err != nil {
 			ch <- streamItem{kind: "err", err: err}
 			return
@@ -1589,10 +1681,12 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 				ch <- streamItem{kind: "token", content: ev.Content}
 
 			case "thinking":
-				// Reasoning arrives as many small chunks. Surface one state change
-				// instead of printing one identical row for every chunk.
+				// Reasoning arrives as many small chunks. Surface one state
+				// change instead of one per chunk: the animated in-frame
+				// indicator (thinkingView) takes over from there and any
+				// non-thinking event ends the phase.
 				if !thinkingShown {
-					ch <- streamItem{kind: "activity", content: sty(cThink).Italic(true).Render("⟳ thinking…")}
+					ch <- streamItem{kind: "thinking"}
 					thinkingShown = true
 				}
 
@@ -2659,6 +2753,82 @@ func (m *appModel) decidePlan(action string) tea.Cmd {
 	}
 }
 
+// openEffortPicker replaces typed effort values with a menu, like the model
+// and theme pickers. Tropical rides at the bottom as the top tier.
+func (m *appModel) openEffortPicker() tea.Cmd {
+	m.pickMode = "effort"
+	m.pickItems = m.pickItems[:0]
+	m.pickSel = 0
+	m.pickItems = append(m.pickItems,
+		pickItem{id: "default", label: "Default", tag: "provider decides"},
+		pickItem{id: "low", label: "Low"},
+		pickItem{id: "medium", label: "Medium"},
+		pickItem{id: "high", label: "High"},
+		pickItem{id: "tropical", label: "TROPICAL", tag: "max effort + heavy subagents"},
+	)
+	current := "default"
+	if m.sess.tropical {
+		current = "tropical"
+	} else if m.sess.effort != "" {
+		current = m.sess.effort
+	}
+	for i, item := range m.pickItems {
+		if item.id == current {
+			m.pickSel = i
+			break
+		}
+	}
+	return nil
+}
+
+// applyEffortChoice acts on a selection from the effort picker. Every choice
+// but tropical leaves Tropical mode; tropical forces high effort.
+func (m *appModel) applyEffortChoice(id string) tea.Cmd {
+	if id == "tropical" {
+		return m.setTropical(!m.sess.tropical)
+	}
+	m.sess.tropical = false
+	switch id {
+	case "low", "medium", "high":
+		m.sess.effort = id
+		return m.printLine("\n" + sty(cAccent).Render("  ◈ effort set to "+id+" (applies from the next message)") + "\n")
+	default:
+		m.sess.effort = ""
+		return m.printLine("\n" + sty(cAccent).Render("  ◈ effort reset to provider default") + "\n")
+	}
+}
+
+// setTropical toggles Tropical mode. Effort is forced to high while on; the
+// previous explicit effort choice is forgotten — turning Tropical off resets
+// to the provider default, mirroring the effort picker's semantics.
+func (m *appModel) setTropical(on bool) tea.Cmd {
+	m.sess.tropical = on
+	if on {
+		m.sess.effort = "high"
+		return m.printLine("\n" + tropicalPartyText("  ◈ TROPICAL mode ON — max effort + heavy subagent parallelism (/tropical to exit)") + "\n")
+	}
+	m.sess.effort = ""
+	return m.printLine("\n" + sty(cAccent).Render("  ◈ TROPICAL mode OFF — effort back to provider default") + "\n")
+}
+
+// tropicalPartyText renders every letter of s in a different themed color —
+// the party look. Rotation is fixed (offset 0); the status-bar chip is the
+// animated variant.
+func tropicalPartyText(s string) string {
+	party := []string{cErr, cWarn, cGreen, cAccent, cPurple, cLavender, cThink, cBright}
+	var b strings.Builder
+	i := 0
+	for _, r := range s {
+		if r == ' ' || r == '—' || r == '-' || r == '/' || r == '(' || r == ')' || r == '+' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteString(sty(party[i%len(party)]).Bold(true).Render(string(r)))
+		i++
+	}
+	return b.String()
+}
+
 // selectPick acts on the highlighted item and closes the menu.
 func (m *appModel) selectPick() tea.Cmd {
 	if m.pickSel < 0 || m.pickSel >= len(m.pickItems) {
@@ -2682,7 +2852,11 @@ func (m *appModel) selectPick() tea.Cmd {
 		if cl := contextLengthFor(m.sess.cfg, qualifiedAlias); cl > 0 {
 			m.ctxMax = cl // reflect the new window immediately
 		}
-		return tea.Printf("\n%s\n", sty(cAccent).Render("  ◈ model → "+shortModel(chosen.id)))
+		// Show the provider-qualified alias: with the same model name served
+		// by several hosts, the bare name hides which one is running.
+		return tea.Printf("\n%s\n", sty(cAccent).Render("  ◈ model → "+qualifiedAlias))
+	case "effort":
+		return m.applyEffortChoice(chosen.id)
 	case "session":
 		return m.resumeSession(chosen.id)
 	case "plan":
@@ -2710,6 +2884,8 @@ func (m appModel) pickerView() string {
 			title = "select a model — " + m.pickProvider
 			escHint = "Esc back" // back to the provider list
 		}
+	case "effort":
+		title = "select effort"
 	case "theme":
 		title = "select a theme — live preview"
 	case "plan":
@@ -3242,8 +3418,10 @@ func main() {
 		die("%v", err)
 	}
 	effortAllow := strings.TrimSpace(*effortFlag)
-	if effortAllow != "" && effortAllow != "low" && effortAllow != "medium" && effortAllow != "high" {
-		die("--effort must be low, medium, or high (got %q)", effortAllow)
+	switch effortAllow {
+	case "", "low", "medium", "high", "tropical":
+	default:
+		die("--effort must be low, medium, high, or tropical (got %q)", effortAllow)
 	}
 	modelAlias := *modelFlag
 	if modelAlias == "" && clientCfg.DefaultModel != "" {
@@ -3308,7 +3486,8 @@ func main() {
 		styles:         cliStyles,
 		workspace:      workspace,
 		threadID:       resumeID,
-		effort:         effortAllow,
+		effort:         strings.TrimPrefix(effortAllow, "tropical"),
+		tropical:       effortAllow == "tropical",
 		planMode:       *planFlag,
 	})
 }
@@ -3670,117 +3849,110 @@ func (m appModel) printWidth() int {
 	return w
 }
 
-// printLine queues s for printing, hard-wrapped to printWidth.
+// printLine queues s for printing, hard-wrapped to printWidth. Payloads taller
+// than the frame-safe row budget are split into sequential chunks: Bubble Tea's
+// insertAbove misplaces the frame when a single print exceeds the visible
+// screen (observed as the frame floating above the payload tail with blank
+// gaps), so no one print may be taller than the terminal.
 func (m appModel) printLine(s string) tea.Cmd {
-	return tea.Printf("%s", wrapForPrint(s, m.printWidth()))
+	wrapped := wrapForPrint(s, m.printWidth())
+	const minChunkRows = 10
+	budget := m.height - 8
+	if budget < minChunkRows {
+		budget = minChunkRows
+	}
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) <= budget {
+		return tea.Printf("%s", wrapped)
+	}
+	var chunks []tea.Cmd
+	for start := 0; start < len(lines); start += budget {
+		end := min(start+budget, len(lines))
+		chunks = append(chunks, tea.Printf("%s", strings.Join(lines[start:end], "\n")))
+	}
+	return tea.Sequence(chunks...)
 }
 
-// popUp moves the cursor up n display lines by emitting ANSI escape
-// sequences, so the next tea.Printf overwrites those lines in-place.
-func popUp(n int) string {
-	if n <= 0 {
+// thinkingView renders the animated in-frame reasoning indicator: "Thinking"
+// with a themed color gradient that rotates every spinner tick (120ms), plus
+// stepping trailing dots, so the row visibly moves in every color profile —
+// including no-color terminals, where the dots alone animate. Transient by
+// design: nothing is printed to the transcript, and the row disappears the
+// moment a non-thinking event (token, tool, completion) arrives.
+func (m appModel) thinkingView() string {
+	if !m.streaming || !m.thinking {
 		return ""
 	}
-	return fmt.Sprintf("\033[%dA", n)
+	cycle := []string{cThink, cLavender, cAccent, cPurple}
+	var b strings.Builder
+	b.WriteString(sty(cThink).Italic(true).Render("⟳") + " ")
+	for i, r := range "Thinking" {
+		b.WriteString(sty(cycle[(i+m.spinIdx)%len(cycle)]).Render(string(r)))
+	}
+	for i := m.spinIdx%3 + 1; i > 0; i-- {
+		b.WriteString(sty(cThink).Render("."))
+	}
+	return b.String()
 }
 
-// eraseRows erases n display rows starting at the cursor's current row and
-// leaves the cursor at the start of the row after the last erased one. It
-// never touches rows beyond the n given, so it is safe to aim at the tail of
-// a replaced in-place rendering without clipping the input block below it.
-//
-// Erase-below (CSI J) must not be used to clear an in-place markdown
-// rendering: the input box and status bar live below the rendering, and
-// Bubble Tea's diff renderer repaints only rows whose content changed, so
-// rows erased out-of-band stay blank until the next keystroke (the reported
-// "typed text disappears while streaming" bug).
-func eraseRows(n int) string {
-	if n <= 0 {
+// liveBlockView renders the in-frame streaming block: the assistant label
+// atop the latest glamour rendering of the accumulating response. It returns
+// "" when no live block is showing (not streaming, a tool turn, or no text
+// yet). Living inside the frame is what keeps progressive rendering correct:
+// the cursed renderer repaints frame content by cell diff, with no reliance
+// on where a previous print left the terminal cursor.
+func (m appModel) liveBlockView() string {
+	if !m.streaming || m.hadToolTurn {
 		return ""
 	}
-	return strings.Repeat("\033[2K\033[1B", n)
-}
-
-// flushGlamour renders the accumulated response text through glamour,
-// replacing the previous rendering in-place using ANSI escape codes.
-// Only called during progressive streaming (tick handler) for tool-less turns.
-func (m *appModel) flushGlamour() tea.Cmd {
-	text := string(m.responseBuf)
-	if text == "" {
-		return nil
-	}
-	rendered := renderMarkdown(text)
-	if rendered == "" {
-		rendered = text
-	}
-	// Glamour renders unwrapped (its reflow wrapper breaks words at
-	// hyphens), so WrapPrint owns line breaking at proseWidth — whitespace
-	// only, with hard-breaking for oversized tokens.
-	prefixed := indentGlamourOutput(wrapForPrint(rendered, m.proseWidth()))
-
-	lines := strings.Count(prefixed, "\n") + 1
-	if prefixed == "" {
-		lines = 0
-	}
-
-	prefix := m.inPlacePrefix(m.lastRenderLines)
-	m.lastRenderLines = lines
-	// The trailing newline is load-bearing: the inline renderer turns it into
-	// an empty final row whose erase keeps the separating blank row clean and
-	// whose carriage return lands the cursor exactly on the frame's first row,
-	// where the renderer anchors the frame for its next repaint.
-	return tea.Printf("%s%s\n", prefix, prefixed)
-}
-
-// inPlacePrefix builds the ANSI prefix that clears the previous markdown
-// rendering before the new one replaces it. The inline renderer inserts the
-// new rendering's rows directly above the input block (and restores the frame
-// position), so the previous rendering's rows now sit just above those
-// inserted rows; erase exactly those rows so the replaced block can't leave a
-// stale copy behind. Nothing at or below the new block's rows is ever erased,
-// and the cursor ends where the new block begins, so the input box survives
-// every flush. Returns "" when there is no previous rendering to clear.
-func (m *appModel) inPlacePrefix(oldLines int) string {
-	if oldLines <= 0 {
+	if !m.liveLabel && m.liveRendered == "" {
 		return ""
 	}
-	// The previous rendering occupied oldLines rows with one separating blank
-	// row above the frame; after the renderer scrolls and reinserts rows for
-	// the new rendering, those oldLines+1 rows sit directly above the new
-	// block's rows. Erase them and land on the new block's first row.
-	return popUp(oldLines+1) + eraseRows(oldLines+1)
+	var b strings.Builder
+	if m.liveLabel {
+		b.WriteString(sty(cPurple).Bold(true).Render("◈ sandbar"))
+	}
+	if m.liveRendered != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.liveRendered)
+	}
+	return b.String()
 }
 
-// printResponse renders the accumulated response text through glamour markdown
-// and prints it on "done", replacing any intermediate rendering in place.
+// refreshLiveRender re-renders responseBuf into the live-block cache. Called
+// from the spinner tick, the same cadence (and the same one glamour render
+// per tick) the old in-place flush paid.
+func (m *appModel) refreshLiveRender() {
+	if !m.liveDirty && m.liveRendered != "" {
+		return
+	}
+	m.liveRendered = renderStoredAssistant(string(m.responseBuf), m.printWidth())
+	m.liveDirty = false
+}
+
+// printResponse commits the streamed assistant text to the transcript: one
+// printLine of the label plus the final glamour rendering, in the same shape
+// renderLastExchange uses when replaying a stored thread. The progressive
+// rendering lived inside the frame, so committing clears the live block and
+// the frame simply shrinks — nothing printed ever needs replacing. Returns
+// nil when the turn produced no text.
 func (m *appModel) printResponse() tea.Cmd {
 	text := string(m.responseBuf)
+	label := m.liveLabel
+	m.liveLabel = false
+	m.liveRendered = ""
+	m.liveDirty = false
 	if text == "" {
-		// Clear any intermediate rendering that's still showing: erase the
-		// block's rows plus its separating blank row, with the same trailing
-		// newline the full flush uses so the cursor lands on the frame's
-		// first row.
-		if m.lastRenderLines > 0 {
-			n := m.lastRenderLines
-			m.lastRenderLines = 0
-			return tea.Printf("%s\n", popUp(n+1)+eraseRows(n+1))
-		}
 		return nil
 	}
-	rendered := renderMarkdown(text)
-	if rendered == "" {
-		rendered = text
+	var b strings.Builder
+	if label {
+		b.WriteString("\n\n" + sty(cPurple).Bold(true).Render("◈ sandbar") + "\n")
 	}
-	// Glamour renders unwrapped (its reflow wrapper breaks words at
-	// hyphens), so WrapPrint owns line breaking at proseWidth — whitespace
-	// only, with hard-breaking for oversized tokens.
-	prefixed := indentGlamourOutput(wrapForPrint(rendered, m.proseWidth()))
-	lines := strings.Count(prefixed, "\n") + 1
-
-	prefix := m.inPlacePrefix(m.lastRenderLines)
-	m.lastRenderLines = lines
-	// The trailing newline is load-bearing — see flushGlamour.
-	return tea.Printf("%s%s\n", prefix, prefixed)
+	b.WriteString(renderStoredAssistant(text, m.printWidth()))
+	return m.printLine(b.String())
 }
 
 // clip truncates s to at most n display cells, appending an ellipsis when

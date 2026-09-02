@@ -189,6 +189,17 @@ func (m appModel) statusLine() string {
 	icon := s.Style(cAccent).Bold(true).Render(sym(s, "⚓", "#"))
 	modelText := s.Style(cPurple).Bold(true).Render(model)
 	separator := s.Style(cBorder).Render(" " + sym(s, "│", "|") + " ")
+	trop := ""
+	if m.sess.tropical {
+		// Party chip: every letter a different themed color, rotating with the
+		// spinner tick while a turn runs — the TROPICAL signature.
+		party := []string{cErr, cWarn, cGreen, cAccent, cPurple, cLavender, cThink, cBright}
+		var b strings.Builder
+		for i, r := range "TROPICAL" {
+			b.WriteString(s.Style(party[(i+m.spinIdx)%len(party)]).Bold(true).Render(string(r)))
+		}
+		trop = separator + b.String()
+	}
 	chip := m.approvalChip(s)
 	if chip != "" {
 		chip = separator + chip // its own segment, like legacy's
@@ -196,9 +207,9 @@ func (m appModel) statusLine() string {
 	var left string
 	switch {
 	case width >= 78:
-		left = " " + icon + " " + modelText + chip + separator + m.contextStatus(s, false)
+		left = " " + icon + " " + modelText + trop + chip + separator + m.contextStatus(s, false)
 	case width >= 52:
-		left = " " + icon + " " + modelText + chip + separator + m.contextStatus(s, true)
+		left = " " + icon + " " + modelText + trop + chip + separator + m.contextStatus(s, true)
 	default:
 		left = " " + icon + " " + modelText
 	}
