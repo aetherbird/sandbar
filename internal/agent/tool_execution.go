@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sashabaranov/go-openai"
 
+	"github.com/aetherbird/sandbar/internal/persona"
 	"github.com/aetherbird/sandbar/internal/tools"
 )
 
@@ -117,5 +121,61 @@ func (a *Agent) executeOneToolCall(ctx context.Context, call openai.ToolCall, wo
 	if err != nil {
 		return fmt.Sprintf("error: %s", err.Error())
 	}
-	return output
+	return a.appendDirInstructions(call.Function.Name, call.Function.Arguments, workspace, output)
+}
+
+// instructionPathTools lists tools whose primary argument is a path under the
+// workspace; directory instructions are surfaced on their results.
+var instructionPathTools = map[string]bool{
+	"file_read":    true,
+	"file_write":   true,
+	"file_append":  true,
+	"file_patch":   true,
+	"search_files": true,
+}
+
+// appendDirInstructions appends the nearest not-yet-injected AGENTS.md/CLAUDE.md
+// governing the tool call's target path, so instructions scoped to a
+// subdirectory reach the model exactly when it starts working there. The
+// search stops at the workspace (whose own files are already in the system
+// prompt) and never leaves it. Each file is injected at most once per Agent;
+// it stays in the transcript afterwards.
+func (a *Agent) appendDirInstructions(name, arguments, workspace, output string) string {
+	if workspace == "" || !instructionPathTools[name] {
+		return output
+	}
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil || args.Path == "" {
+		return output
+	}
+	if strings.Contains(args.Path, "://") { // URL-like file_read targets (pr://, issue://, agent://)
+		return output
+	}
+	target := args.Path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(workspace, target)
+	}
+	path, content, ok := persona.NearestDirectoryInstructions(filepath.Dir(target), workspace)
+	if !ok {
+		return output
+	}
+	a.instrMu.Lock()
+	if a.injectedInstr == nil {
+		a.injectedInstr = make(map[string]bool)
+	}
+	if a.injectedInstr[path] {
+		a.instrMu.Unlock()
+		return output
+	}
+	a.injectedInstr[path] = true
+	a.instrMu.Unlock()
+
+	rel, err := filepath.Rel(workspace, path)
+	if err != nil {
+		rel = path
+	}
+	return fmt.Sprintf("%s\n\n[sandbar: instructions from %s — applies to files under %s]\n%s",
+		output, rel, filepath.Dir(rel), strings.TrimRight(content, "\n"))
 }

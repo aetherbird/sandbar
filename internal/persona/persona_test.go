@@ -89,6 +89,93 @@ func TestBuildSystemPromptMultipleFiles(t *testing.T) {
 	}
 }
 
+// TestProjectContextAncestorWalk pins the hierarchical discovery: inside a git
+// repo, AGENTS.md/CLAUDE.md from ancestors up to the repo root are included
+// with relative-path headers, outermost first, before the workspace's own
+// full-priority file set. Workspace-local names (.sandbar.md, .cursorrules)
+// are never picked up from ancestors.
+func TestProjectContextAncestorWalk(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("Repo root rule."), 0644)
+	os.WriteFile(filepath.Join(repo, ".sandbar.md"), []byte("Must not appear."), 0644)
+
+	mid := filepath.Join(repo, "packages")
+	os.MkdirAll(filepath.Join(mid, "app"), 0755)
+	os.WriteFile(filepath.Join(mid, "CLAUDE.md"), []byte("Mid-level rule."), 0644)
+	ws := filepath.Join(mid, "app")
+	os.WriteFile(filepath.Join(ws, "AGENTS.md"), []byte("Workspace rule."), 0644)
+
+	got := loadProjectContext(ws)
+	wantOrder := []string{"Repo root rule.", "Mid-level rule.", "Workspace rule."}
+	last := -1
+	for _, want := range wantOrder {
+		idx := strings.Index(got, want)
+		if idx < 0 {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+		if idx < last {
+			t.Fatalf("%q appeared before the previous layer (want outermost first):\n%s", want, got)
+		}
+		last = idx
+	}
+	if !strings.Contains(got, "### ../../AGENTS.md") {
+		t.Errorf("ancestor header missing relative path:\n%s", got)
+	}
+	if !strings.Contains(got, "### ../CLAUDE.md") {
+		t.Errorf("mid-level header missing relative path:\n%s", got)
+	}
+	if !strings.Contains(got, "### AGENTS.md\n") {
+		t.Errorf("workspace header must stay a bare filename:\n%s", got)
+	}
+	if strings.Contains(got, "Must not appear.") {
+		t.Errorf("ancestor .sandbar.md must not be loaded:\n%s", got)
+	}
+}
+
+// TestProjectContextNoGitNoWalk pins that outside a git repo the scan stays at
+// the workspace root — the walk never leaves the project by accident.
+func TestProjectContextNoGitNoWalk(t *testing.T) {
+	ws := t.TempDir()
+	parent := filepath.Dir(ws)
+	os.WriteFile(filepath.Join(parent, "AGENTS.md"), []byte("Outside rule."), 0644)
+
+	if got := loadProjectContext(ws); got != "" {
+		t.Fatalf("non-repo workspace must not pick up ancestor files, got:\n%s", got)
+	}
+}
+
+// TestNearestDirectoryInstructions pins the per-directory lookup: nearest
+// level wins, AGENTS.md beats CLAUDE.md at the same level, the workspace root
+// is a hard stop, and paths outside the workspace find nothing.
+func TestNearestDirectoryInstructions(t *testing.T) {
+	ws := t.TempDir()
+	sub := filepath.Join(ws, "a", "b")
+	deep := filepath.Join(sub, "c")
+	os.MkdirAll(deep, 0755)
+	os.WriteFile(filepath.Join(ws, "AGENTS.md"), []byte("root"), 0644)
+	os.WriteFile(filepath.Join(sub, "CLAUDE.md"), []byte("claude-mid"), 0644)
+	os.WriteFile(filepath.Join(deep, "AGENTS.md"), []byte("agents-deep"), 0644)
+
+	if _, content, ok := NearestDirectoryInstructions(deep, ws); !ok || content != "agents-deep" {
+		t.Fatalf("deep lookup = %q, %v; want agents-deep", content, ok)
+	}
+	os.Remove(filepath.Join(deep, "AGENTS.md"))
+	if _, content, ok := NearestDirectoryInstructions(deep, ws); !ok || content != "claude-mid" {
+		t.Fatalf("after removing deep file = %q, %v; want claude-mid", content, ok)
+	}
+	// The workspace root itself is excluded — its files are in the system prompt.
+	os.Remove(filepath.Join(sub, "CLAUDE.md"))
+	if _, _, ok := NearestDirectoryInstructions(deep, ws); ok {
+		t.Fatal("lookup must stop before the workspace root")
+	}
+	if _, _, ok := NearestDirectoryInstructions(t.TempDir(), ws); ok {
+		t.Fatal("lookup outside the workspace must find nothing")
+	}
+}
+
 func TestBuildSystemPromptEnvironmentBlock(t *testing.T) {
 	tmpDir := t.TempDir()
 
