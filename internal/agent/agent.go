@@ -71,6 +71,11 @@ type Agent struct {
 	// summary" notice at one per agent lifetime: a persistently broken store
 	// would otherwise repeat it on every turn.
 	compressionLoadNoticeOnce sync.Once
+	// injectedInstr tracks instruction files (AGENTS.md/CLAUDE.md) already
+	// appended to a tool result, so a subdirectory's instructions are injected
+	// once per agent instead of on every file tool call under it.
+	instrMu       sync.Mutex
+	injectedInstr map[string]bool
 }
 
 type threadTurnLock struct {
@@ -639,8 +644,14 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		return thread.ID, err
 	}
 
-	// Build LLM message history.
-	indexedMsgs, err := a.buildMessages(thread.ID, req.Workspace, req.Source, req.PlanOnly, onEvent)
+	// Build LLM message history. "tropical" is a session mode, not a wire
+	// effort: it maps to high and injects the heavy-subagent directive.
+	effort := req.Effort
+	tropical := effort == "tropical"
+	if tropical {
+		effort = "high"
+	}
+	indexedMsgs, err := a.buildMessages(thread.ID, req.Workspace, req.Source, req.PlanOnly, onEvent, tropical)
 	if err != nil {
 		return thread.ID, fmt.Errorf("build messages: %w", err)
 	}
@@ -714,7 +725,6 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		}
 	})
 
-	effort := req.Effort
 	if req.PlanOnly {
 		ctx = tools.WithPlanMode(ctx)
 	}
@@ -742,13 +752,23 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		}
 
 		if resolved.SupportsTools && a.tools != nil {
-			// Tool-capable models use non-streaming Complete so a single response
-			// can carry either native tool calls or terminal text.
+			// Tool-capable models complete with a single response that can
+			// carry either native tool calls or terminal text. When the wire
+			// client supports it, the completion streams live — reasoning
+			// (thinking) and answer deltas reach onEvent as they arrive —
+			// while assembling the same single result.
 			openaiTools := a.buildToolSchemas()
 			var result *llm.CompletionResult
+			streamedLive := false
 			err := runWithLLMRetry(ctx, onEvent, func() error {
 				var callErr error
-				result, callErr = client.CompleteWithOptions(ctx, llmMessages, llm.CompleteOptions{Tools: openaiTools, Effort: effort})
+				streamedLive = false
+				if lc, ok := client.(llm.LiveCompleter); ok {
+					result, callErr = lc.CompleteWithOptionsLive(ctx, llmMessages, llm.CompleteOptions{Tools: openaiTools, Effort: effort}, liveEventSender(onEvent))
+					streamedLive = callErr == nil
+				} else {
+					result, callErr = client.CompleteWithOptions(ctx, llmMessages, llm.CompleteOptions{Tools: openaiTools, Effort: effort})
+				}
 				return callErr
 			})
 			if err != nil {
@@ -973,7 +993,9 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 			// No tool calls means result.Content is the terminal response from
 			// the same request that received the tool schemas. Preserve it rather
 			// than discarding it and issuing a second, tools-free streaming call.
-			err = a.emitAndPersistCompletion(thread.ID, result.Content, onEvent)
+			// When the deltas already streamed live, only the terminal event
+			// remains to emit — re-emitting the content would duplicate it.
+			err = a.emitAndPersistCompletion(thread.ID, result.Content, onEvent, streamedLive)
 			if err == nil && thread.Title == nil {
 				go a.maybeGenerateTitle(thread.ID, req.ModelAlias)
 			}
@@ -982,7 +1004,7 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		}
 
 		// Streaming turn (no tools or follow-up after tool execution).
-		err = a.streamAndPersist(ctx, client, thread.ID, llmMessages, onEvent, req.Effort)
+		err = a.streamAndPersist(ctx, client, thread.ID, llmMessages, onEvent, effort)
 		if err == nil && thread.Title == nil {
 			go a.maybeGenerateTitle(thread.ID, req.ModelAlias)
 		}
@@ -1119,20 +1141,29 @@ func (a *Agent) streamAndPersist(ctx context.Context, client llm.WireClient, thr
 	return onEvent(llm.StreamEvent{Type: "done", ThreadID: threadID, Content: threadID})
 }
 
-// emitAndPersistCompletion finalizes a non-streaming completion. Tool-capable
+// emitAndPersistCompletion finalizes a buffered completion. Tool-capable
 // turns use Client.Complete so one provider response can carry native tool
 // calls or terminal text; emitting the text as one token event keeps the
-// public event contract without another model request.
-func (a *Agent) emitAndPersistCompletion(threadID, content string, onEvent func(llm.StreamEvent) error) error {
+// public event contract without another model request. alreadyStreamed skips
+// that emission when the same content reached onEvent as live deltas.
+func (a *Agent) emitAndPersistCompletion(threadID, content string, onEvent func(llm.StreamEvent) error, alreadyStreamed bool) error {
 	if content != "" {
-		if err := onEvent(llm.StreamEvent{Type: "token", Content: content}); err != nil {
-			return err
+		if !alreadyStreamed {
+			if err := onEvent(llm.StreamEvent{Type: "token", Content: content}); err != nil {
+				return err
+			}
 		}
 		if _, err := a.store.AppendMessage(threadID, "assistant", &content, nil); err != nil {
 			return fmt.Errorf("persist assistant message: %w", err)
 		}
 	}
 	return onEvent(llm.StreamEvent{Type: "done", ThreadID: threadID, Content: threadID})
+}
+
+// liveEventSender adapts the agent's onEvent callback to the llm package's
+// push-style event sender. A failed send stops forwarding, never the request.
+func liveEventSender(onEvent func(llm.StreamEvent) error) func(llm.StreamEvent) bool {
+	return func(ev llm.StreamEvent) bool { return onEvent(ev) == nil }
 }
 
 func (a *Agent) persistAssistantTurn(threadID, content string, toolCalls []openai.ToolCall) (*memory.Message, error) {
@@ -1204,7 +1235,23 @@ func (a *Agent) executeTool(ctx context.Context, name, arguments, workspace stri
 // buildMessages assembles the indexed message view for a turn. onEvent, when
 // non-nil, receives a one-time "intermediate" notice if the saved compression
 // summary cannot be loaded (the turn continues with the full history).
-func (a *Agent) buildMessages(threadID, workspace string, source string, planOnly bool, onEvent func(llm.StreamEvent) error) ([]indexedMessage, error) {
+// tropicalModeDirective is appended to the system prompt while Tropical mode
+// is engaged — sandbar's adaptation of the "ultracode" tier other harnesses
+// ship: maximum effort plus explicit pressure to parallelize through
+// subagents instead of grinding through work serially.
+const tropicalModeDirective = `
+# Tropical Mode
+
+The user has engaged Tropical mode: treat this task as large and important.
+- Reason at maximum depth; verify assumptions before acting on them.
+- Parallelize aggressively with delegate_task. Spawn independent subagents
+  for research, exploration, and implementation of separable components —
+  several focused subagents beat one long serial pass.
+- Before reporting completion, verify the combined work with a fresh
+  subagent rather than trusting your own summary of it.
+`
+
+func (a *Agent) buildMessages(threadID, workspace string, source string, planOnly bool, onEvent func(llm.StreamEvent) error, tropical bool) ([]indexedMessage, error) {
 	// Load latest compression record and inject summary if valid.
 	var compRec *memory.CompressionRecord
 	if a.store != nil {
@@ -1256,6 +1303,9 @@ func (a *Agent) buildMessages(threadID, workspace string, source string, planOnl
 	sysPrompt := p.BuildSystemPrompt(workspace, model)
 	if promptFiles.Append != "" {
 		sysPrompt += "\n\n" + persona.RenderPrompt(promptFiles.Append, workspace)
+	}
+	if tropical {
+		sysPrompt += "\n" + tropicalModeDirective
 	}
 	subagentsAvailable := false
 	if a.tools != nil {

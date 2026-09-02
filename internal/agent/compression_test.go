@@ -1768,14 +1768,14 @@ func TestBuildMessagesSurfacesCompressionLoadErrorOnce(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent); err == nil {
+	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent, false); err == nil {
 		t.Fatal("expected an error when the store is unavailable")
 	}
 	if len(notices) != 1 || !strings.HasPrefix(notices[0].Content, "compression: ") {
 		t.Fatalf("expected exactly one compression notice, got %v", notices)
 	}
 	// The same broken store on a later turn must not repeat the notice.
-	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent); err == nil {
+	if _, err := a.buildMessages(thread.ID, "", "cli", false, onEvent, false); err == nil {
 		t.Fatal("expected an error when the store is unavailable")
 	}
 	if len(notices) != 1 {

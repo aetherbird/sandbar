@@ -28,6 +28,11 @@ var ErrStreamIdle = errors.New("provider stream stalled: no data received within
 // report) and must surface verbatim to callers.
 var ErrThinkStop = errors.New("model stopped after reasoning without producing an answer")
 
+// errEmptyStreamResponse marks a stream that completed without any content,
+// tool call, or reasoning. The buffered path treats that as an empty result;
+// the live path unwraps it the same way instead of erroring the turn.
+var errEmptyStreamResponse = errors.New("empty stream response")
+
 // streamIdleTimeout bounds how long a streaming response may go between
 // chunks. Providers emit deltas or keepalives continuously while generating,
 // so silence for this long means the connection is dead. A var (not const)
@@ -204,7 +209,31 @@ func (c *Client) CompleteWithOptions(ctx context.Context, messages []openai.Chat
 	if !IsFallbackWorthy(err) {
 		return nil, err
 	}
-	return c.completeStreaming(ctx, messages, opts)
+	return c.completeStreaming(ctx, messages, opts, nil)
+}
+
+// CompleteWithOptionsLive is CompleteWithOptions with a live event feed:
+// reasoning and answer deltas are forwarded to send as they arrive on the
+// streaming transport while the result is assembled with the same
+// single-response semantics (native tool calls or terminal text). Streaming
+// runs first — the only way to be live; a fallback-worthy failure retries
+// non-streaming with no events. A send returning false stops forwarding, not
+// the request.
+func (c *Client) CompleteWithOptionsLive(ctx context.Context, messages []openai.ChatCompletionMessage, opts CompleteOptions, send func(StreamEvent) bool) (*CompletionResult, error) {
+	result, err := c.completeStreaming(ctx, messages, opts, send)
+	if err == nil {
+		return result, nil
+	}
+	// An empty streamed terminal is a legitimate (if odd) provider response —
+	// completeNonStreaming returns an empty result for one, so the live path
+	// must too rather than failing the turn or burning a fallback request.
+	if errors.Is(err, errEmptyStreamResponse) {
+		return &CompletionResult{}, nil
+	}
+	if !IsFallbackWorthy(err) {
+		return nil, err
+	}
+	return c.completeNonStreaming(ctx, messages, opts)
 }
 
 // IsFallbackWorthy reports whether a non-streaming completion error should be
@@ -315,7 +344,7 @@ func (c *Client) completeNonStreaming(ctx context.Context, messages []openai.Cha
 	}, nil
 }
 
-func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCompletionMessage, opts CompleteOptions) (*CompletionResult, error) {
+func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCompletionMessage, opts CompleteOptions, send func(StreamEvent) bool) (*CompletionResult, error) {
 	req := openai.ChatCompletionRequest{
 		Model:    c.model,
 		Messages: c.withToolResultNames(messages),
@@ -381,6 +410,22 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 		// Collect reasoning deltas so a think-stop (reasoning with no
 		// answer/tool call) can be reported truthfully at the end.
 		reasoning += delta.ReasoningContent
+		if send != nil {
+			// Live consumers see each delta as it arrives: reasoning as
+			// thinking (the TUI's reasoning indicator), answer text as
+			// tokens. Usage stays with the assembled result — the agent
+			// emits it once per completed call.
+			if delta.ReasoningContent != "" {
+				if !send(StreamEvent{Type: "thinking", Content: delta.ReasoningContent}) {
+					send = nil // consumer gone; keep assembling
+				}
+			}
+			if send != nil && delta.Content != "" {
+				if !send(StreamEvent{Type: "token", Content: delta.Content}) {
+					send = nil
+				}
+			}
+		}
 
 		for _, tc := range delta.ToolCalls {
 			idx := 0
@@ -423,7 +468,7 @@ func (c *Client) completeStreaming(ctx context.Context, messages []openai.ChatCo
 			// Same truthful think-stop report as the non-streaming path.
 			return nil, fmt.Errorf("%w (%d reasoning chars)", ErrThinkStop, len(reasoning))
 		}
-		return nil, fmt.Errorf("empty response from model")
+		return nil, fmt.Errorf("%w: empty response from model", errEmptyStreamResponse)
 	}
 
 	return &CompletionResult{
@@ -501,6 +546,17 @@ func (c *Client) ChatWithOptions(ctx context.Context, messages []openai.ChatComp
 			}
 
 			delta := resp.Choices[0].Delta
+			// Reasoning deltas (reasoning_content — the GLM/DeepSeek/Qwen
+			// dialect) are a distinct phase from answer content: surface them
+			// as thinking events so the UI can show its reasoning indicator,
+			// exactly like inline <think> tags and Anthropic thinking deltas.
+			if delta.ReasoningContent != "" {
+				select {
+				case ch <- StreamEvent{Type: "thinking", Content: delta.ReasoningContent}:
+				case <-ctx.Done():
+					return
+				}
+			}
 			if delta.Content == "" {
 				continue
 			}

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,9 +26,8 @@ import (
 // must announce the thread ID it created or resumed, before any provider call.
 func TestAgentChatInterruptedTurnAnnouncesThreadID(t *testing.T) {
 	workspace := t.TempDir()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}}]},"finish_reason":"tool_calls"}]}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer server.Close()
 
@@ -90,12 +88,11 @@ func TestAgentChatInterruptedFirstTurnResumesWithHistory(t *testing.T) {
 		callCount++
 		raw, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(raw))
-		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}},{"id":"t2","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf second\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSONBody(w, raw, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"t1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}},{"id":"t2","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf second\"}"}}]},"finish_reason":"tool_calls"}]}`)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"resumed with history"},"finish_reason":"stop"}]}`)
+		respondJSONBody(w, raw, `{"choices":[{"message":{"role":"assistant","content":"resumed with history"},"finish_reason":"stop"}]}`)
 	}))
 	defer server.Close()
 

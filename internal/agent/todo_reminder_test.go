@@ -140,7 +140,6 @@ func (rec *chatRoundRecorder) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.bodies = append(rec.bodies, string(body))
 	rec.calls++
-	w.Header().Set("Content-Type", "application/json")
 	if rec.calls <= rec.rounds {
 		name := "file_read"
 		args := fmt.Sprintf(`{"path":"f%d.txt"}`, rec.calls)
@@ -148,7 +147,7 @@ func (rec *chatRoundRecorder) handler(w http.ResponseWriter, r *http.Request) {
 			name = "todo"
 			args = `{"action":"list"}`
 		}
-		fmt.Fprintf(w, `{
+		respondJSONBody(w, body, fmt.Sprintf(`{
 			"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test",
 			"choices":[{
 				"index":0,"message":{
@@ -161,10 +160,10 @@ func (rec *chatRoundRecorder) handler(w http.ResponseWriter, r *http.Request) {
 				},
 				"finish_reason":"tool_calls"
 			}]
-		}`, rec.calls, name, args)
+		}`, rec.calls, name, args))
 		return
 	}
-	fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+	respondJSONBody(w, body, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 }
 
 // nudgeMentions counts nudge occurrences across all recorded provider payloads.

@@ -214,12 +214,11 @@ func TestAgentChatSerializesConcurrentTurnsOnSameThread(t *testing.T) {
 		mu.Unlock()
 		// Widen the window in which unsynchronized turns would interleave.
 		time.Sleep(20 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
 		if n%2 == 1 {
-			fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_%d","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf out%d\"}"}}]},"finish_reason":"tool_calls"}]}`, n, n)
+			respondJSON(w, r, fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_%d","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf out%d\"}"}}]},"finish_reason":"tool_calls"}]}`, n, n))
 			return
 		}
-		fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"turn %d done"},"finish_reason":"stop"}]}`, n)
+		respondJSON(w, r, fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"turn %d done"},"finish_reason":"stop"}]}`, n))
 	}))
 	defer ts.Close()
 
@@ -399,7 +398,7 @@ func TestBuildMessagesFailsOnStoreError(t *testing.T) {
 	}
 	store.Close() // force subsequent reads to fail
 
-	if _, err := agent.buildMessages(thread.ID, "", "web", false, nil); err == nil {
+	if _, err := agent.buildMessages(thread.ID, "", "web", false, nil, false); err == nil {
 		t.Fatal("expected an error when the store is unavailable")
 	}
 }

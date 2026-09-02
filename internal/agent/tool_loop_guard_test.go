@@ -54,10 +54,9 @@ func TestAgentRepeatedIdenticalToolCallsWarnThenStop(t *testing.T) {
 	}
 
 	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"repeat-%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"same.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount)
+		respondJSON(w, r, fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"repeat-%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"same.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount))
 	}))
 	defer server.Close()
 
@@ -124,16 +123,15 @@ func TestAgentRepeatedToolCallWarningAllowsRecovery(t *testing.T) {
 	}
 
 	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		switch callCount {
 		case 1, 2, 3:
-			fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"same-%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount)
+			respondJSON(w, r, fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"same-%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount))
 		case 4:
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"changed","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"changed","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
 		default:
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}]}`)
+			respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}]}`)
 		}
 	}))
 	defer server.Close()

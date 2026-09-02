@@ -30,6 +30,14 @@ var (
 	_ WireClient = (*anthropicClient)(nil)
 )
 
+// LiveCompleter is an optional WireClient capability: a tool-capable
+// completion whose streamed reasoning and answer deltas are forwarded live.
+// The agent uses it when present so tool-capable turns stream like plain
+// ones; clients that lack it keep the buffered contract.
+type LiveCompleter interface {
+	CompleteWithOptionsLive(ctx context.Context, messages []openai.ChatCompletionMessage, opts CompleteOptions, send func(StreamEvent) bool) (*CompletionResult, error)
+}
+
 // NewWireClient builds the wire client a resolved model's api field selects:
 // "anthropic-messages" gets the native Anthropic Messages client; anything
 // else ("" / "openai-completions") gets the OpenAI-compatible client.

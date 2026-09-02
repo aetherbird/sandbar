@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,14 +27,13 @@ func TestAgentRemoteShellExecExecutesOnFakeSSH(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		switch callCount {
 		case 1:
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"remote-1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo remote-marker\",\"host\":\"some-host\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"remote-1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo remote-marker\",\"host\":\"some-host\"}"}}]},"finish_reason":"tool_calls"}]}`)
 		default:
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"remote work done"},"finish_reason":"stop"}]}`)
+			respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"remote work done"},"finish_reason":"stop"}]}`)
 		}
 	}))
 	defer server.Close()

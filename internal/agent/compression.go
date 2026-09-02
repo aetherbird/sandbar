@@ -556,7 +556,7 @@ func (a *Agent) CompressNow(ctx context.Context, threadID, modelAlias string) (C
 	if err != nil {
 		return CompressionResult{}, fmt.Errorf("resolve model: %w", err)
 	}
-	msgs, err := a.buildMessages(threadID, a.cfg.Workspace, "cli", false, nil)
+	msgs, err := a.buildMessages(threadID, a.cfg.Workspace, "cli", false, nil, false)
 	if err != nil {
 		return CompressionResult{}, fmt.Errorf("build messages: %w", err)
 	}

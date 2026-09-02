@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,72 @@ import (
 	"github.com/aetherbird/sandbar/internal/memory"
 	"github.com/aetherbird/sandbar/internal/tools"
 )
+
+// respondJSON emulates a provider that honors the OpenAI streaming contract:
+// a "stream":true request (tool-capable turns now stream via
+// CompleteWithOptionsLive) gets the same logical response wrapped as SSE
+// chunks; anything else gets plain JSON. Test servers use it so one HTTP
+// round-trip equals one logical response under both transports.
+func respondJSON(w http.ResponseWriter, r *http.Request, jsonResponse string) {
+	body, _ := io.ReadAll(r.Body)
+	respondJSONBody(w, body, jsonResponse)
+}
+
+// respondJSONBody is respondJSON for handlers that already consumed the
+// request body (e.g. to capture it for assertions).
+func respondJSONBody(w http.ResponseWriter, body []byte, jsonResponse string) {
+	if !bytes.Contains(body, []byte(`"stream":true`)) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+		return
+	}
+	respondJSONStreamAware(w, true, jsonResponse)
+}
+
+// respondJSONStreamAware is respondJSON for handlers that decoded the request
+// themselves and already know whether it asked to stream.
+func respondJSONStreamAware(w http.ResponseWriter, stream bool, jsonResponse string) {
+	if !stream {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+		return
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Role      string          `json:"role"`
+				Content   string          `json:"content"`
+				ToolCalls json.RawMessage `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(jsonResponse), &payload); err != nil || len(payload.Choices) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	delta := map[string]any{"role": payload.Choices[0].Message.Role, "content": payload.Choices[0].Message.Content}
+	if len(payload.Choices[0].Message.ToolCalls) > 0 {
+		var tcs []map[string]any
+		if json.Unmarshal(payload.Choices[0].Message.ToolCalls, &tcs) == nil {
+			for i := range tcs {
+				tcs[i]["index"] = i
+			}
+			delta["tool_calls"] = tcs
+		}
+	}
+	chunk := map[string]any{"id": "1", "object": "chat.completion.chunk",
+		"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}}}
+	b, _ := json.Marshal(chunk)
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	fin := map[string]any{"id": "1", "object": "chat.completion.chunk",
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": payload.Choices[0].FinishReason}}}
+	bf, _ := json.Marshal(fin)
+	fmt.Fprintf(w, "data: %s\n\n", bf)
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
 
 func setupTestAgent(t *testing.T, supportsTools bool) (*Agent, *memory.Store, func()) {
 	dbPath := t.TempDir() + "/test.db"
@@ -56,7 +123,7 @@ func setupTestAgent(t *testing.T, supportsTools bool) (*Agent, *memory.Store, fu
 // test when the history cannot be loaded or repaired.
 func mustBuildMessages(t *testing.T, a *Agent, threadID, workspace, source string) []indexedMessage {
 	t.Helper()
-	msgs, err := a.buildMessages(threadID, workspace, source, false, nil)
+	msgs, err := a.buildMessages(threadID, workspace, source, false, nil, false)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
@@ -202,15 +269,10 @@ func TestAgentChatMaxTurns(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if callCount == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`)
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
-		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -251,12 +313,11 @@ func TestAgentChatZeroMaxTurnsIsUnlimited(t *testing.T) {
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		if callCount <= toolTurns {
-			fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"missing-%d.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount, callCount)
+			respondJSON(w, r, fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_%d","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"missing-%d.txt\"}"}}]},"finish_reason":"tool_calls"}]}`, callCount, callCount))
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"completed after the long tool loop"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"completed after the long tool loop"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -453,9 +514,7 @@ func TestAgentExecuteToolUnknown(t *testing.T) {
 
 func TestAgentChatContextCancellation(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}},{"id":"call_2","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf second\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf first\"}"}},{"id":"call_2","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf second\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -612,8 +671,7 @@ func TestAgentNonFunctionToolCall(t *testing.T) {
 
 func TestAgentRejectsEmptyToolCallIDBeforePersistence(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -643,8 +701,7 @@ func TestAgentRejectsReusedToolCallIDBeforeSecondAssistantPersistence(t *testing
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_reused","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_reused","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"printf hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -879,9 +936,7 @@ func TestAgentStreamAndPersistError(t *testing.T) {
 
 func TestAgentOnEventErrorDuringToolCall(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -917,9 +972,7 @@ func TestAgentOnEventErrorDuringToolCall(t *testing.T) {
 
 func TestAgentOnEventErrorDuringProcessing(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -1178,8 +1231,7 @@ func TestAgentRetriesTransientCompleteError(t *testing.T) {
 			fmt.Fprint(w, `{"error":{"message":"provider overloaded","type":"server_error"}}`)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"recovered answer"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"choices":[{"message":{"role":"assistant","content":"recovered answer"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -1493,14 +1545,14 @@ func TestBuildMessagesPlanModeDirective(t *testing.T) {
 	if _, err := a.store.AppendMessage(thread.ID, "user", strPtr("plan the thing"), nil); err != nil {
 		t.Fatalf("seed message: %v", err)
 	}
-	msgs, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", true, nil)
+	msgs, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", true, nil, false)
 	if err != nil {
 		t.Fatalf("buildMessages: %v", err)
 	}
 	if msgs[0].Msg.Role != openai.ChatMessageRoleSystem || !strings.Contains(msgs[0].Msg.Content, "PLAN MODE") {
 		t.Fatalf("plan-mode directive missing from system prompt: %q", msgs[0].Msg.Content)
 	}
-	plain, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", false, nil)
+	plain, err := a.buildMessages(thread.ID, a.cfg.Workspace, "cli", false, nil, false)
 	if err != nil {
 		t.Fatalf("buildMessages plain: %v", err)
 	}

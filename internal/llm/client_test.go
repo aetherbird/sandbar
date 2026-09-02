@@ -16,6 +16,94 @@ import (
 	"github.com/aetherbird/sandbar/internal/config"
 )
 
+// TestChatStreamReasoningContent pins the GLM/DeepSeek/Qwen reasoning dialect:
+// reasoning arrives in delta.reasoning_content, separate from answer content,
+// and must surface as thinking events (the TUI's reasoning indicator depends
+// on them) — previously these deltas were dropped silently, so a thinking
+// model showed no activity at all until the answer began.
+func TestChatStreamReasoningContent(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"deliberating \"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"hard\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer.\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "fake-key", "test-model")
+	ch, err := client.Chat(context.Background(), []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+
+	var tokens, thinking []string
+	for ev := range ch {
+		switch ev.Type {
+		case "token":
+			tokens = append(tokens, ev.Content)
+		case "thinking":
+			thinking = append(thinking, ev.Content)
+		}
+	}
+	if len(tokens) != 1 || tokens[0] != "Answer." {
+		t.Errorf("tokens: %v", tokens)
+	}
+	if len(thinking) != 2 || thinking[0] != "deliberating " || thinking[1] != "hard" {
+		t.Errorf("thinking events: %q", thinking)
+	}
+}
+
+// TestCompleteWithOptionsLiveForwardsDeltasAndAssemblesTools pins the live
+// tool-capable completion: reasoning and text deltas reach send as they
+// arrive while streamed tool calls are assembled into the returned result —
+// the contract the agent's tool loop and the TUI's thinking indicator rely on.
+func TestCompleteWithOptionsLiveForwardsDeltasAndAssemblesTools(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		chunks := []string{
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"ponder "},"finish_reason":null}]}`,
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"ing"},"finish_reason":null}]}`,
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"file_write","arguments":"{\"path\":\"a"}}]},"finish_reason":null}]}`,
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":".txt\"}"}}]},"finish_reason":null}]}`,
+			`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "fake-key", "test-model")
+	var got []string
+	result, err := client.CompleteWithOptionsLive(context.Background(), []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+	}, CompleteOptions{}, func(ev StreamEvent) bool {
+		got = append(got, ev.Type+":"+ev.Content)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("live complete: %v", err)
+	}
+	if len(got) != 2 || got[0] != "thinking:ponder " || got[1] != "thinking:ing" {
+		t.Fatalf("forwarded events = %q", got)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Function.Name != "file_write" {
+		t.Fatalf("assembled tool calls: %+v", result.ToolCalls)
+	}
+	if args := result.ToolCalls[0].Function.Arguments; args != `{"path":"a.txt"}` {
+		t.Fatalf("split streamed arguments = %q", args)
+	}
+}
+
 func TestChatStreamPlain(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -139,6 +141,7 @@ func TestAgentWithoutSubagentsOmitsSchemasAndFailsClosed(t *testing.T) {
 							Name string `json:"name"`
 						} `json:"function"`
 					} `json:"tools"`
+					Stream bool `json:"stream"`
 				}
 				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 					t.Errorf("decode request: %v", err)
@@ -151,12 +154,11 @@ func TestAgentWithoutSubagentsOmitsSchemasAndFailsClosed(t *testing.T) {
 						firstToolNames = append(firstToolNames, schema.Function.Name)
 					}
 				}
-				w.Header().Set("Content-Type", "application/json")
 				if callCount == 1 {
-					fmt.Fprint(w, test.firstResponse)
+					respondJSONStreamAware(w, body.Stream, test.firstResponse)
 					return
 				}
-				fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+				respondJSONStreamAware(w, body.Stream, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
 			}))
 			defer ts.Close()
 
@@ -236,14 +238,14 @@ func TestAgentToolCapableTerminalResponseUsesSingleRequest(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		var body struct {
-			Tools []json.RawMessage `json:"tools"`
+			Tools  []json.RawMessage `json:"tools"`
+			Stream bool              `json:"stream"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requestHadTools = len(body.Tools) > 0
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"terminal answer"},"finish_reason":"stop"}]}`)
+		respondJSONStreamAware(w, body.Stream, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"terminal answer"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -308,9 +310,7 @@ func TestAgentToolCallAndResult(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			// Non-streaming tool call response.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			fmt.Fprint(w, `{
+			respondJSON(w, r, `{
 				"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test",
 				"choices":[{
 					"index":0,"message":{
@@ -327,9 +327,7 @@ func TestAgentToolCallAndResult(t *testing.T) {
 			return
 		}
 		// Second Complete() call is the terminal response.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -429,9 +427,7 @@ func TestAgentToolCallResultsPreserveProviderOrder(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if callCount == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			fmt.Fprintf(w, `{
+			respondJSON(w, r, `{
 				"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test",
 				"choices":[{
 					"index":0,"message":{
@@ -446,9 +442,7 @@ func TestAgentToolCallResultsPreserveProviderOrder(t *testing.T) {
 			}`)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -512,9 +506,8 @@ func TestAgentIndependentToolCallsRunConcurrently(t *testing.T) {
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
-			fmt.Fprint(w, `{
+			respondJSON(w, r, `{
 				"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test",
 				"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[
 					{"id":"call_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a.txt\"}"}},
@@ -522,7 +515,7 @@ func TestAgentIndependentToolCallsRunConcurrently(t *testing.T) {
 				]},"finish_reason":"tool_calls"}]}`)
 			return
 		}
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -596,12 +589,11 @@ func TestAgentDelegateTasksRunConcurrentlyAndTagProgress(t *testing.T) {
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
-			fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"delegate_1","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"first\"}"}},{"id":"delegate_2","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"second\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"delegate_1","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"first\"}"}},{"id":"delegate_2","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"second\"}"}}]},"finish_reason":"tool_calls"}]}`)
 			return
 		}
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -666,8 +658,7 @@ func TestAgentCancelledConcurrentBatchPersistsEveryToolResult(t *testing.T) {
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"cancel_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a\"}"}},{"id":"cancel_2","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"cancel_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a\"}"}},{"id":"cancel_2","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer ts.Close()
 
@@ -911,21 +902,21 @@ func TestAgentStreamingFallbackPreservesToolsAndExecutesNativeCall(t *testing.T)
 
 		switch callCount {
 		case 1:
-			// Force Client.Complete to use its streaming fallback.
+			// Force CompleteWithOptionsLive to fall back: the live streaming
+			// attempt is rejected with the documented "streaming required" 4xx,
+			// so the buffered fallback must carry the tools.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":{"message":"streaming required","type":"invalid_request_error"}}`)
 		case 2:
-			w.Header().Set("Content-Type", "text/event-stream")
-			firstArgs := `{"path":"stream`
-			secondArgs := `ed.txt","content":"hello","expected_sha256":"absent"}`
-			fmt.Fprintf(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_stream\",\"type\":\"function\",\"function\":{\"name\":\"file_write\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", firstArgs)
-			fmt.Fprintf(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", secondArgs)
-			fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
-			fmt.Fprint(w, "data: [DONE]\n\n")
-		case 3:
+			// Buffered fallback: native tool call as plain JSON.
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+			fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_stream","type":"function","function":{"name":"file_write","arguments":"{\"path\":\"streamed.txt\",\"content\":\"hello\",\"expected_sha256\":\"absent\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		case 3:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Done\"},\"finish_reason\":null}]}\n\n")
+			fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
 		default:
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
 		}
@@ -956,7 +947,7 @@ func TestAgentStreamingFallbackPreservesToolsAndExecutesNativeCall(t *testing.T)
 	if len(requestTools) != 3 || requestTools[0] == 0 || requestTools[1] == 0 || requestTools[2] == 0 {
 		t.Fatalf("tool schemas were not preserved on every agent-loop request: %v", requestTools)
 	}
-	if len(requestStreams) != 3 || requestStreams[0] || !requestStreams[1] || requestStreams[2] {
+	if len(requestStreams) != 3 || !requestStreams[0] || requestStreams[1] || !requestStreams[2] {
 		t.Fatalf("unexpected request modes: %v", requestStreams)
 	}
 	got, err := os.ReadFile(filepath.Join(workspace, "streamed.txt"))
@@ -999,12 +990,11 @@ func TestAgentExecutesObservedHaikuFunctionCallsInWorkspace(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
-			fmt.Fprintf(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, toolMarkup)
+			respondJSON(w, r, fmt.Sprintf(`{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, toolMarkup))
 			return
 		}
-		fmt.Fprint(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+		respondJSON(w, r, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 	}))
 	defer ts.Close()
 
@@ -1073,20 +1063,20 @@ func TestAgentRepeatedMidLoopCompressionPreservesIndexedStateAndRawHistory(t *te
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []openai.ChatCompletionMessage `json:"messages"`
+			Stream   bool                           `json:"stream"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode provider request: %v", err)
 		}
 		requests = append(requests, body.Messages)
 
-		w.Header().Set("Content-Type", "application/json")
 		switch len(requests) {
 		case 1:
-			fmt.Fprint(w, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_a","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSONStreamAware(w, body.Stream, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_a","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
 		case 2:
-			fmt.Fprint(w, `{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_b","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			respondJSONStreamAware(w, body.Stream, `{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_b","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
 		case 3:
-			fmt.Fprint(w, `{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
+			respondJSONStreamAware(w, body.Stream, `{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}`)
 		default:
 			http.Error(w, "unexpected provider request", http.StatusInternalServerError)
 		}
@@ -1235,7 +1225,21 @@ func TestAgentCompressionErrorEventIncludesDiagnosticAndAttemptMetadata(t *testi
 	}
 	callCount := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		callCount++
+		// Tool-capable turns stream (CompleteWithOptionsLive): honor the
+		// stream flag with SSE so each logical response is one round-trip.
+		if bytes.Contains(body, []byte(`"stream":true`)) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			delta := `{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Done"},"finish_reason":null}]}`
+			if callCount == 1 {
+				delta = `{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_large","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"large.txt\"}"}}]},"finish_reason":null}]}`
+			}
+			fmt.Fprintf(w, "data: %s\n\n", delta)
+			fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
 			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_large","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"large.txt\"}"}}]},"finish_reason":"tool_calls"}]}`)
