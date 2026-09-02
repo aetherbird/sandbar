@@ -232,10 +232,8 @@ func modelsJSONProviderToConfig(name string, p modelsJSONProvider, path string) 
 	for _, m := range p.Models {
 		mc := ModelConfig{
 			Name: m.Name,
-			// The legacy schema has no supports_tools switch and legacy
-			// always advertised tools, so imported models default to tool
-			// support (YAML providers keep the explicit opt-in).
-			SupportsTools: boolPtr(true),
+			// Legacy always advertised tools; the resolver now defaults to
+			// tool support, so imports write no flag at all.
 		}
 		if m.ContextWindow > 0 {
 			mc.ContextLength = intPtr(m.ContextWindow)

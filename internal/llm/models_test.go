@@ -93,8 +93,8 @@ func TestResolveModelGlobalDefault(t *testing.T) {
 	if m.ContextLength != 0 {
 		t.Errorf("context_length: got %d, want 0", m.ContextLength)
 	}
-	if m.SupportsTools != false {
-		t.Errorf("supports_tools: got %v, want false", m.SupportsTools)
+	if m.SupportsTools != true {
+		t.Errorf("supports_tools: got %v, want true (tools are the default; only an explicit off-switch disables them)", m.SupportsTools)
 	}
 }
 

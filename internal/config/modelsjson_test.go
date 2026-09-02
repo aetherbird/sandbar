@@ -159,9 +159,10 @@ func TestModelsJSONMergeAndClash(t *testing.T) {
 	if qwen.Name != "Qwen3 14B" {
 		t.Errorf("qwen3 name = %q, want display name", qwen.Name)
 	}
-	// Legacy schema has no supports_tools; imported models default to on.
-	if qwen.SupportsTools == nil || !*qwen.SupportsTools {
-		t.Errorf("qwen3 supports_tools = %v, want true", qwen.SupportsTools)
+	// Legacy schema has no supports_tools; the resolver defaults to tools on,
+	// so imports must not write a redundant flag.
+	if qwen.SupportsTools != nil {
+		t.Errorf("qwen3 supports_tools = %v, want unset (resolver default)", qwen.SupportsTools)
 	}
 	if alias := ollama.Models["vendor/aliased"]; alias.ModelID == nil || *alias.ModelID != "wire-id" {
 		t.Errorf("aliased model_id = %v, want wire-id", alias.ModelID)

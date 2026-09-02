@@ -31,8 +31,7 @@ func DefaultFromEnv() (*Config, bool) {
     base_url: %q
     api_key: %q
     models:
-      %s:
-        supports_tools: true
+      %s: {}
 `, baseURL, apiKey, model)
 	// The env values are already interpolated into the YAML; finalizeConfig
 	// re-runs interpolation harmlessly and applies the same defaults and

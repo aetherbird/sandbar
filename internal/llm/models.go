@@ -102,13 +102,15 @@ func (r *Registry) resolveWithin(p config.ProviderConfig, alias string, m config
 		resolved.MaxTokens = *p.ModelDefaults.MaxTokens
 	}
 
-	// SupportsTools inheritance: model > model_defaults > false.
+	// SupportsTools inheritance: model > model_defaults > true. Native tool
+	// calling is the norm — the flag exists as an off-switch for endpoints
+	// that reject the tools array, so configurations never have to state it.
 	if m.SupportsTools != nil {
 		resolved.SupportsTools = *m.SupportsTools
 	} else if p.ModelDefaults.SupportsTools != nil {
 		resolved.SupportsTools = *p.ModelDefaults.SupportsTools
 	} else {
-		resolved.SupportsTools = false
+		resolved.SupportsTools = true
 	}
 
 	// ModelID: if set in config, use it for API calls; otherwise the alias is used.
