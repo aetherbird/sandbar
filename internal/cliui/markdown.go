@@ -117,8 +117,14 @@ func markdownStyle(s *Styles) glamouransi.StyleConfig {
 	style.Emph.Color = color(t.Text2)
 	style.Strong.Color = color(t.Text1)
 	style.BlockQuote.Color = color(t.Text2)
+	// Inline code is foreground-only: a Surface2 background chip reads as a
+	// white box washing out on light-theme (paper/cream) terminals, and
+	// 256-color downsampling can shift it to pure white. The colored text is
+	// distinct from body copy without relying on the terminal background.
 	style.Code.Color = color(t.Success)
-	style.Code.BackgroundColor = color(t.Surface2)
+	style.Code.BackgroundColor = nil
+	// Fenced blocks keep their panel background: they are full-width rows
+	// whose fg/bg pair is theme-controlled, not chips on the terminal bg.
 	style.CodeBlock.BackgroundColor = color(t.Surface1)
 	style.HorizontalRule.Color = color(t.Border2)
 	return style

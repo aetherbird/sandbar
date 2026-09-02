@@ -162,3 +162,34 @@ func TestMarkdownHeadingsShareAccentColor(t *testing.T) {
 		}
 	}
 }
+
+// TestInlineCodeHasNoBackground pins the inline-code contract: code spans are
+// foreground-only. A Surface2 background chip reads as a white box washing out
+// on light (paper/cream) terminals — especially after 256-color downsampling —
+// so no background SGR may appear for a document whose only styled element is
+// an inline code span. (Fenced blocks keep their panel and are not covered.)
+func TestInlineCodeHasNoBackground(t *testing.T) {
+	s := stylesFor(t, "github-light", false, ProfileANSI256)
+	r := &MarkdownRenderer{}
+	out := r.Render(s, "run `go test ./...` now")
+	if !strings.Contains(stripStyleCodes(out), "go test ./...") {
+		t.Fatalf("code span content missing from render: %q", out)
+	}
+	if strings.Contains(out, "\x1b[48;") {
+		t.Fatalf("inline code carries a background SGR (white-chip wash on light themes):\n%q", out)
+	}
+}
+
+func stripStyleCodes(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && !((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')) {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
