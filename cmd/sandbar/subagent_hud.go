@@ -101,7 +101,11 @@ func (m appModel) subagentHUDView() string {
 		}
 		activity := state.activity
 		if activity == "" {
-			activity = "working…"
+			if state.status == "background" {
+				activity = "running in background…"
+			} else {
+				activity = "working…"
+			}
 		}
 		prefix := spinFrames[m.spinIdx%len(spinFrames)] + " " + shortID(state.id) + "  "
 		line := styles.Style(cAccent).Render(prefix) + styles.Style(cBright).Render(goal) + styles.Style(cMuted).Render("  ·  "+activity)

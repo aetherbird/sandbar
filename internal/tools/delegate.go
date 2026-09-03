@@ -100,6 +100,38 @@ func delegateTask(runner SubagentRunner, ctx context.Context, args map[string]in
 	ctx = WithSubagentTaskID(ctx, taskID)
 	sink := eventSink(ctx)
 	toolCallID := ToolCallIDFromContext(ctx)
+
+	// Background delegation: the sub-agent runs detached from this turn's
+	// context (which ends as soon as the tool result returns), so it survives
+	// the turn completing, Esc interrupts, and the parent conversing freely.
+	// Completion status and result are persisted by the runner; a drainer
+	// keeps its event channel flowing so the runner is never blocked on sends.
+	if bg, _ := args["background"].(bool); bg {
+		bgCtx := context.Background()
+		if ws := WorkspaceFromContext(ctx); ws != "" {
+			bgCtx = WithWorkspace(bgCtx, ws)
+		}
+		if effort := EffortFromContext(ctx); effort != "" {
+			bgCtx = WithEffort(bgCtx, effort)
+		}
+		bgCtx = WithSubagentTaskID(bgCtx, taskID)
+		events, err := runner.SpawnSubagent(bgCtx, goal, contextStr)
+		if err != nil {
+			if sink != nil {
+				sink(SubagentEvent{Type: "error", ToolCallID: toolCallID, TaskID: taskID, Goal: goal, Status: "failed", Content: err.Error(), Err: err})
+			}
+			return "", fmt.Errorf("spawn background subagent: %w", err)
+		}
+		go func() {
+			for range events {
+			}
+		}()
+		if sink != nil {
+			sink(SubagentEvent{Type: "start", ToolCallID: toolCallID, TaskID: taskID, Goal: goal, Status: "background"})
+		}
+		return fmt.Sprintf("[Delegated in background — Task ID: %s]\nThe sub-agent is running independently and its result will be delivered to you automatically as a follow-up message when it completes. Do not wait or poll: report to the user that it is underway, keep working, or delegate more tasks in parallel.", taskID), nil
+	}
+
 	if sink != nil {
 		sink(SubagentEvent{
 			Type:       "start",

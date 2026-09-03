@@ -363,7 +363,7 @@ func NewRegistry(workspace, braveAPIKey, openrouterAPIKey string, blockedCommand
 	if opts.subagents {
 		r.Register(Tool{
 			Name:         "delegate_task",
-			Description:  "Delegate an independent subtask to a sub-agent and wait for its summary. Send multiple delegate_task calls in ONE batch when the subtasks are independent — they run concurrently. Do not delegate small bounded lookups you can do in one or two calls, and do not fan out multiple sub-agents onto one small task. The sub-agent sees nothing of this conversation: give it a self-contained briefing (objective, relevant paths/commands, constraints, and the exact shape of the summary you want back). Trust but verify its summary against the actual files or output. If a sub-agent is interrupted, resume_task with its task_id instead of re-delegating from scratch.",
+			Description:  "Delegate an independent subtask to a sub-agent and wait for its summary. Send multiple delegate_task calls in ONE batch when the subtasks are independent — they run concurrently. Set background: true to delegate without waiting: the sub-agent runs independently, you return to the user immediately, and the result is delivered to you as a new message when it completes — use this for long research/build tasks so you stay responsive. Do not delegate small bounded lookups you can do in one or two calls, and do not fan out multiple sub-agents onto one small task. The sub-agent sees nothing of this conversation: give it a self-contained briefing (objective, relevant paths/commands, constraints, and the exact shape of the summary you want back). Trust but verify its summary against the actual files or output. If a sub-agent is interrupted, resume_task with its task_id instead of re-delegating from scratch.",
 			ParallelSafe: true,
 			Metadata:     argumentToolMetadata(TierExec, "delegate", "goal"),
 			Schema: map[string]interface{}{
@@ -377,6 +377,10 @@ func NewRegistry(workspace, braveAPIKey, openrouterAPIKey string, blockedCommand
 					"context": map[string]interface{}{
 						"type":        "string",
 						"description": "Relevant background, constraints, or findings the sub-agent should use.",
+					},
+					"background": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Run the sub-agent in the background: return immediately instead of waiting, stay available to the user, and receive the result as an automatic follow-up message when it completes.",
 					},
 				},
 				"required":             []string{"goal"},

@@ -159,6 +159,38 @@ func waitForStreamItem(ch <-chan streamItem, gen int) tea.Cmd {
 	}
 }
 
+// bgTaskDoneMsg reports a background sub-agent task reaching a terminal
+// status (or a polling failure).
+type bgTaskDoneMsg struct {
+	taskID string
+	status string
+	result string
+	err    error
+}
+
+// pollBackgroundTask polls a detached sub-agent task until it reaches a
+// terminal status. Bounded to an hour so a wedged task cannot poll forever.
+func pollBackgroundTask(be backend.Backend, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		watcher, ok := be.(backend.SubagentTaskWatcher)
+		if !ok {
+			return bgTaskDoneMsg{taskID: taskID, err: fmt.Errorf("backend cannot report subagent status")}
+		}
+		deadline := time.Now().Add(time.Hour)
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+			status, result, err := watcher.SubagentTaskStatus(taskID)
+			if err != nil {
+				return bgTaskDoneMsg{taskID: taskID, err: err}
+			}
+			if status != "running" {
+				return bgTaskDoneMsg{taskID: taskID, status: status, result: result}
+			}
+		}
+		return bgTaskDoneMsg{taskID: taskID, err: fmt.Errorf("timed out waiting for background task")}
+	}
+}
+
 // ── Other messages ────────────────────────────────────────────────────────────
 
 type tickMsg time.Time
@@ -362,6 +394,11 @@ type appModel struct {
 	liveLabel    bool
 	liveRendered string
 	liveDirty    bool
+	// bgTasks tracks background sub-agent delegations (delegate_task with
+	// background: true) by task ID → goal. They survive the turn; a poller
+	// delivers each result to the model when the task reaches a terminal
+	// status.
+	bgTasks map[string]string
 	// thinking is true while the model is in a reasoning phase. It drives the
 	// animated in-frame indicator (thinkingView) — transient, never printed
 	// to the transcript; any non-thinking stream event ends the phase.
@@ -509,6 +546,39 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case searchDoneMsg:
 		cmds = append(cmds, m.printLine(renderSearchResults(msg)))
+
+	case bgTaskDoneMsg:
+		// A background sub-agent finished: hand its result to the model —
+		// as a steering message when mid-turn (delivered at the next tool
+		// boundary), or as an automatic follow-up turn when idle.
+		goal := m.bgTasks[msg.taskID]
+		delete(m.bgTasks, msg.taskID)
+		if msg.err != nil {
+			cmds = append(cmds, m.printLine("\n"+sty(cWarn).Render("  ⚠ background task "+shortID(msg.taskID)+": "+msg.err.Error())))
+			return m, tea.Batch(cmds...)
+		}
+		note := fmt.Sprintf("[Background sub-agent task %s %s]\nGoal: %s\n\nResult:\n%s",
+			msg.taskID, msg.status, firstNonEmpty(goal, "(unknown goal)"), firstNonEmpty(msg.result, "(no output)"))
+		switch {
+		case m.streaming && m.sess.threadID != "":
+			if q, ok := m.sess.backend.(backend.MessageQueuer); ok {
+				enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := q.EnqueueUserMessage(enqCtx, m.sess.threadID, note)
+				enqCancel()
+				if err == nil {
+					cmds = append(cmds, m.printLine("\n"+sty(cGreen).Render("  ⇢ background task "+shortID(msg.taskID)+" "+msg.status+" — result queued for the model")))
+					return m, tea.Batch(cmds...)
+				}
+			}
+			// Queue endpoint unavailable: stash for after the turn, like any
+			// other mid-turn send that cannot steer.
+			m.pendingSends = append(m.pendingSends, note)
+			cmds = append(cmds, m.printLine("\n"+sty(cGreen).Render("  ⇢ background task "+shortID(msg.taskID)+" "+msg.status+" — result will be sent after this turn")))
+		default:
+			cmds = append(cmds, m.printLine("\n"+sty(cAccent).Render("  ◈ background task "+shortID(msg.taskID)+" "+msg.status+" — delivering result to the model")))
+			cmds = m.startStream(note, cmds)
+		}
+		return m, tea.Batch(cmds...)
 
 	case shellDoneMsg:
 		m.escapeRunning, m.escapeCancel = false, nil
@@ -694,6 +764,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "subagent":
 			m.updateSubagentHUD(msg)
+			// A background delegation outlives the turn: register it and poll
+			// the backend so its result is delivered to the model when done.
+			if msg.taskStatus == "background" && msg.taskID != "" {
+				if m.bgTasks == nil {
+					m.bgTasks = make(map[string]string)
+				}
+				if _, seen := m.bgTasks[msg.taskID]; !seen {
+					m.bgTasks[msg.taskID] = msg.taskGoal
+					cmds = append(cmds, pollBackgroundTask(m.sess.backend, msg.taskID))
+				}
+			}
 			cmds = append(cmds, waitForStreamItem(m.streamCh, m.streamGen))
 
 		case "approval":
@@ -1795,7 +1876,7 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 				}
 
 			case "subagent_start":
-				ch <- streamItem{kind: "subagent", taskID: firstNonEmpty(ev.TaskID, ev.ToolCallID), taskGoal: ev.TaskGoal, taskStatus: "running", content: "starting"}
+				ch <- streamItem{kind: "subagent", taskID: firstNonEmpty(ev.TaskID, ev.ToolCallID), taskGoal: ev.TaskGoal, taskStatus: firstNonEmpty(ev.TaskStatus, "running"), content: "starting"}
 
 			case "subagent_tool_call":
 				activity := ev.ToolName

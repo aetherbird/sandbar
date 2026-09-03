@@ -1244,11 +1244,13 @@ const tropicalModeDirective = `
 
 The user has engaged Tropical mode: treat this task as large and important.
 - Reason at maximum depth; verify assumptions before acting on them.
-- Parallelize aggressively with delegate_task. Spawn independent subagents
-  for research, exploration, and implementation of separable components —
-  several focused subagents beat one long serial pass.
+- Parallelize aggressively with delegate_task — and prefer background: true:
+  launch several independent sub-agents, return to the user immediately, and
+  keep conversing while they work; each result arrives as an automatic
+  follow-up message you must fold into the work. Blocking waits are for small
+  batches only — never park the user behind a long batch.
 - Before reporting completion, verify the combined work with a fresh
-  subagent rather than trusting your own summary of it.
+  sub-agent rather than trusting your own summary of it.
 `
 
 func (a *Agent) buildMessages(threadID, workspace string, source string, planOnly bool, onEvent func(llm.StreamEvent) error, tropical bool) ([]indexedMessage, error) {

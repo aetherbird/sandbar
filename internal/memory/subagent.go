@@ -70,6 +70,23 @@ func (s *Store) SubagentTranscript(taskID string) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
+// SubagentTaskStatus returns the persisted lifecycle state of one subagent
+// task: status ("running", "completed", "failed", "interrupted") and its
+// final result text (empty while running). Callers polling for completion
+// treat any status other than "running" as terminal.
+func (s *Store) SubagentTaskStatus(taskID string) (status, result string, err error) {
+	err = s.db.QueryRow(
+		`SELECT status, result FROM subagent_tasks WHERE id = ?`, taskID,
+	).Scan(&status, &result)
+	if err == sql.ErrNoRows {
+		return "", "", fmt.Errorf("subagent task not found: %s", taskID)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("load subagent task %s: %w", taskID, err)
+	}
+	return status, result, nil
+}
+
 // subagentMessage mirrors the transcript-relevant subset of the serialized
 // openai.ChatCompletionMessage rows stored in subagent_tasks.messages_json.
 type subagentMessage struct {

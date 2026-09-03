@@ -76,6 +76,15 @@ type TodoLister interface {
 	ListTodos(ctx context.Context, threadID string) ([]memory.TodoItem, error)
 }
 
+// SubagentTaskWatcher is an optional interface for polling background
+// sub-agent tasks (delegate_task with background: true): the frontend learns
+// when a detached task finishes and what it produced, then delivers the result
+// to the model as a follow-up message. Statuses: "running", "completed",
+// "failed", "interrupted".
+type SubagentTaskWatcher interface {
+	SubagentTaskStatus(taskID string) (status, result string, err error)
+}
+
 // PlanDecider is an optional interface for approving or rejecting a thread's
 // pending plan (the plan-mode lifecycle). Callers type-assert a Backend to
 // this rather than expanding the stable interface (same pattern as
@@ -276,6 +285,12 @@ func (b *LocalBackend) ListTodos(ctx context.Context, threadID string) ([]memory
 		return nil, err
 	}
 	return b.store.ListTodos(threadID)
+}
+
+// SubagentTaskStatus exposes a background sub-agent task's persisted
+// lifecycle state to frontends polling for completion delivery.
+func (b *LocalBackend) SubagentTaskStatus(taskID string) (status, result string, err error) {
+	return b.store.SubagentTaskStatus(taskID)
 }
 
 // DecidePlan approves or rejects the thread's pending plan via the agent.
