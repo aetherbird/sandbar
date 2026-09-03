@@ -1077,12 +1077,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.histIdx >= len(m.history) {
 				m.draft = m.ta.Value()
 			}
+			rowsBefore := m.computeVisualRows()
 			if m.histIdx > 0 {
 				m.histIdx--
 				m.ta.SetValue(m.history[m.histIdx])
 				m.ta.CursorEnd()
 			}
-			m.syncInputHeight() // recalled message may span multiple rows
+			// Recalling history only fills the input: completion popups must
+			// not spawn off the recalled text, and a recalled message that
+			// wraps to more (or fewer) rows resizes the frame — repaint so the
+			// previous frame's rows are not left burned into the screen.
+			m.slashDismissed, m.pathDismissed, m.mentionDismissed = true, true, true
+			m.slashSel, m.pathSel, m.mentionSel = 0, 0, 0
+			if m.computeVisualRows() != rowsBefore {
+				return m, tea.ClearScreen
+			}
 			return m, nil
 
 		case "down":
@@ -1120,6 +1129,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			rowsBefore := m.computeVisualRows()
 			if m.histIdx < len(m.history)-1 {
 				m.histIdx++
 				m.ta.SetValue(m.history[m.histIdx])
@@ -1129,7 +1139,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ta.SetValue(m.draft)
 				m.ta.CursorEnd()
 			}
-			m.syncInputHeight()
+			// Same contract as up-recall: fill the input only — no popups off
+			// recalled text, clean repaint when the wrapped row count changes.
+			m.slashDismissed, m.pathDismissed, m.mentionDismissed = true, true, true
+			m.slashSel, m.pathSel, m.mentionSel = 0, 0, 0
+			if m.computeVisualRows() != rowsBefore {
+				return m, tea.ClearScreen
+			}
 			return m, nil
 
 		case "enter", "alt+enter":
