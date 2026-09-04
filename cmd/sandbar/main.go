@@ -1624,7 +1624,7 @@ func (m *appModel) clipTextarea(rendered string) string {
 // Height management is now handled by the fixed viewport + clipTextarea.
 func (m *appModel) syncInputHeight() {}
 
-	// tokFlushThreshold is how many bytes tokBuf may accumulate before a spinner
+// tokFlushThreshold is how many bytes tokBuf may accumulate before a spinner
 // tick flushes it mid-stream (progressive assistant text) instead of waiting
 // for the next tool event or "done". Tool turns flush plain progressive prose
 // the same way: the alternative is tokens accumulating silently and dumping
