@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPrintLineChunksTallPayloads pins the insertAbove safety bound: a payload
@@ -67,5 +68,55 @@ func TestPrintLineChunkBudgetFollowsTerminalHeight(t *testing.T) {
 	}
 	if got := len(batchPrintfBodies(t, tall.printLine(payload))); got != 1 {
 		t.Fatalf("height 100 chunked a 60-row payload into %d printfs, want 1", got)
+	}
+}
+
+// TestTickProgressivelyFlushesToolTurnProse pins that assistant tokens on a
+// tool turn are printed progressively on the spinner tick — never accumulated
+// silently into one giant unstyled dump at the next tool event.
+func TestTickProgressivelyFlushesToolTurnProse(t *testing.T) {
+	m := newModel(&session{modelAlias: "m"})
+	m.width = 80
+	m.height = 24
+	m.streamGen = 1
+	m.streamCh = make(chan streamItem)
+	m.streaming = true
+	m.hadToolTurn = true
+	m.tokBuf = []byte(strings.Repeat("prose chunk ", 60))
+	m.responseBuf = append([]byte(nil), m.tokBuf...)
+
+	upd, cmd := m.Update(tickMsg(time.Now()))
+	_ = upd.(appModel)
+	found := false
+	for _, body := range batchPrintfBodies(t, cmd) {
+		if strings.Contains(stripANSI(body), "prose chunk") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("streaming tick did not flush buffered tool-turn prose")
+	}
+}
+
+// TestTickToolTurnFlushRespectsNoANSIBelow pins the safety contract for the
+// progressive flush: a tool-turn tick payload must carry no cursor-movement
+// escapes (renderer desync class) and leave the typed input visible.
+func TestTickToolTurnFlushRespectsNoANSIBelow(t *testing.T) {
+	m := newModel(&session{modelAlias: "m"})
+	m.width = 80
+	m.height = 24
+	m.streamGen = 1
+	m.streamCh = make(chan streamItem)
+	m.streaming = true
+	m.hadToolTurn = true
+	m.tokBuf = []byte(strings.Repeat("prose chunk ", 60))
+	m.responseBuf = append([]byte(nil), m.tokBuf...)
+	typeTestKey(t, &m, "Z")
+
+	upd, cmd := m.Update(tickMsg(time.Now()))
+	m = upd.(appModel)
+	assertNoCursorEscapes(t, "tool-turn tick", batchPrintfBodies(t, cmd))
+	if !strings.Contains(stripANSI(m.View().Content), "Z") {
+		t.Fatal("typed text missing from View after tool-turn tick")
 	}
 }

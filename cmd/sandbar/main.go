@@ -514,11 +514,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming || len(m.bgTasks) > 0 {
 			m.spinIdx++
 			interval = 120 * time.Millisecond
-			if m.streaming && !m.hadToolTurn && len(m.responseBuf) > 0 {
-				// Progressive markdown: re-render the buffer into the
-				// in-frame live block. No tea.printf — the renderer repaints
-				// the frame itself, so nothing can drift.
-				m.refreshLiveRender()
+			if m.streaming && len(m.responseBuf) > 0 {
+				if m.hadToolTurn {
+					// Tool turn: progressively flush the buffered prose into
+					// the transcript (same cadence as the live block below).
+					// Waiting for tool events instead dumps everything as one
+					// giant unstyled block at the next event.
+					if cmd := m.flushTokens(false); cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+				} else {
+					// Progressive markdown: re-render the buffer into the
+					// in-frame live block. No tea.Printf — the renderer repaints
+					// the frame itself, so nothing can drift.
+					m.refreshLiveRender()
+				}
 			}
 		}
 		cmds = append(cmds, tea.Tick(interval, func(t time.Time) tea.Msg { return tickMsg(t) }))
@@ -1614,9 +1624,11 @@ func (m *appModel) clipTextarea(rendered string) string {
 // Height management is now handled by the fixed viewport + clipTextarea.
 func (m *appModel) syncInputHeight() {}
 
-// tokFlushThreshold is how many bytes tokBuf may accumulate before a spinner
+	// tokFlushThreshold is how many bytes tokBuf may accumulate before a spinner
 // tick flushes it mid-stream (progressive assistant text) instead of waiting
-// for the next tool event or "done".
+// for the next tool event or "done". Tool turns flush plain progressive prose
+// the same way: the alternative is tokens accumulating silently and dumping
+// as one giant unstyled block at the next event.
 const tokFlushThreshold = 512
 
 // flushTokens prints buffered assistant text. The final flush (tool events,
