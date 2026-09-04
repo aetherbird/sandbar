@@ -87,6 +87,34 @@ func TestFlushTokensFinalOutputMargined(t *testing.T) {
 	}
 }
 
+// TestToolTurnTailRendersMarkdown pins the tool-turn turn-end fix: markdown
+// text buffered after tool calls renders through glamour (not plain prose),
+// so no raw ## or ** markers reach the transcript on tool turns. Drives the
+// real "done" Update path with hadToolTurn set, like the pasted failing case.
+func TestToolTurnTailRendersMarkdown(t *testing.T) {
+	m := newModel(&session{modelAlias: "m"})
+	m.width = 80
+	m.streaming = true
+	m.streamGen = 1
+	m.streamCh = make(chan streamItem, 8)
+	m.hadToolTurn = true
+	m.tokBuf = []byte("## Findings\n\nSome **bold** text with `code`.\n")
+
+	_, cmd := m.Update(streamItem{gen: 1, kind: "done", footer: "1s"})
+	if cmd == nil {
+		t.Fatal("done produced no output command")
+	}
+	out := stripANSI(executeTeaCommandText(t, cmd))
+	if strings.Contains(out, "## Findings") || strings.Contains(out, "**bold**") || strings.Contains(out, "`code`") {
+		t.Fatalf("tool-turn tail left raw markdown source:\n%s", out)
+	}
+	for _, want := range []string{"Findings", "bold", "code"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tool-turn tail lost content %q:\n%s", want, out)
+		}
+	}
+}
+
 // ── /noformat ────────────────────────────────────────────────────────────────
 
 // TestNoformatPrintsRawText pins the /noformat contract: a styled one-line

@@ -822,9 +822,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var body string
 				if m.hadToolTurn {
 					// Tool calls occurred — text was printed inline; only the
-					// buffered tail remains.
+					// buffered tail remains. Render it as markdown like every
+					// other assistant-text commit; plain wrapping here is what
+					// left raw ## and ** markers on tool turns.
 					if tail := strings.TrimRight(string(m.tokBuf), "\n"); tail != "" {
-						if s := m.marginProse(tail); s != "" {
+						if s := renderStoredAssistant(tail, m.printWidth()); s != "" {
 							body = s + "\n"
 						}
 					}
