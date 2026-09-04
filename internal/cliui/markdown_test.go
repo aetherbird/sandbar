@@ -53,14 +53,12 @@ func TestMarkdownRendererCachesPerStyleConfig(t *testing.T) {
 		t.Fatal("light and dark Markdown output should use different palette escapes")
 	}
 
-	// The ASCII profile passes text through verbatim and must not touch the
-	// cache at all.
+	// The ASCII profile renders structurally (zero ANSI) instead of passing
+	// through verbatim, and must rebuild the cached renderer when switching
+	// to or from it.
 	plainOutput := renderer.Render(plain, "# Sandbar\n\n`code`")
-	if plainOutput != "# Sandbar\n\n`code`" {
-		t.Fatalf("ASCII profile must pass markdown through verbatim, got %q", plainOutput)
-	}
-	if renderer.renderer != darkRenderer {
-		t.Fatal("ASCII passthrough rebuilt the cached renderer")
+	if strings.Contains(plainOutput, "`code`") {
+		t.Fatalf("ASCII profile left markdown source unrendered, got %q", plainOutput)
 	}
 	if strings.Contains(plainOutput, "\x1b[") {
 		t.Fatalf("ASCII Markdown contains SGR output: %q", plainOutput)

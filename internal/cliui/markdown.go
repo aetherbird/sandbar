@@ -13,14 +13,16 @@ import (
 )
 
 // markdownRendererKey identifies the exact renderer configuration: the theme
-// id plus the JSON-encoded style config. The JSON is the configuration Glamour
-// actually consumes — the color profile only matters through the palette
-// colors already downsampled into it — so caching on the JSON keeps renderers
-// correct across profiles without carrying the profile dimension Glamour v2
-// no longer knows about.
+// id plus the JSON-encoded style config (empty for the fixed ASCII config).
+// The JSON is the configuration Glamour actually consumes — the color profile
+// only matters through the palette colors already downsampled into it — so
+// caching on the JSON keeps renderers correct across profiles without carrying
+// the profile dimension Glamour v2 no longer knows about. The ascii flag
+// selects the zero-ANSI structural renderer for the ASCII profile.
 type markdownRendererKey struct {
 	themeID   string
 	styleJSON string
+	ascii     bool
 }
 
 // markdownTermRenderer is the minimal surface of a glamour term renderer; the
@@ -47,6 +49,31 @@ type MarkdownRenderer struct {
 
 func defaultMarkdownBuild(s *Styles) (markdownTermRenderer, error) {
 	return buildMarkdown(s, "terminal16m")
+}
+
+// buildASCIIStyle is the zero-ANSI structural renderer for the ASCII profile:
+// no colors, no SGR escapes, but markdown delimiters still render into plain
+// structure (headings without # markers, bold/italic/code de-marked, list
+// bullets normalized) instead of passing raw source through. Glamour's stock
+// ASCII config re-emits the delimiters (it targets no-TTY logs that mirror
+// markdown), so the emphasis/code/heading prefixes are cleared here.
+func buildASCIIStyle() glamouransi.StyleConfig {
+	style := styles.ASCIIStyleConfig
+	zero := uint(0)
+	style.Document.Margin = &zero
+	empty := glamouransi.StylePrimitive{}
+	style.Emph = empty
+	style.Strong = empty
+	style.Strikethrough = empty
+	style.Code.StylePrimitive = empty
+	style.Heading.StylePrimitive = glamouransi.StylePrimitive{BlockSuffix: "\n"}
+	style.H1.StylePrimitive = glamouransi.StylePrimitive{}
+	style.H2.StylePrimitive = glamouransi.StylePrimitive{}
+	style.H3.StylePrimitive = glamouransi.StylePrimitive{}
+	style.H4.StylePrimitive = glamouransi.StylePrimitive{}
+	style.H5.StylePrimitive = glamouransi.StylePrimitive{}
+	style.H6.StylePrimitive = glamouransi.StylePrimitive{}
+	return style
 }
 
 // buildMarkdownStyle constructs a term renderer from an explicit style config
@@ -143,23 +170,31 @@ func (m *MarkdownRenderer) Reset() {
 // printable width.
 //
 // Guards, in order: empty or non-markdown text passes through verbatim; the
-// ASCII profile passes through verbatim so --color never output carries no
-// glamour ANSI; renderer construction and render errors both fall back to the
-// raw text so rendering never loses the message.
+// ASCII profile renders structurally through a zero-ANSI Glamour config, so
+// --color never output carries no SGR but never shows raw markdown source
+// either; renderer construction and render errors both fall back to the raw
+// text so rendering never loses the message.
 func (m *MarkdownRenderer) Render(s *Styles, text string) string {
 	if text == "" || !looksLikeMarkdown(text) {
 		return text
 	}
-	if !s.ColorsEnabled() {
-		return text
-	}
-	key := markdownRendererKey{themeID: s.Palette().ID}
-	if styleJSON, err := json.Marshal(markdownStyle(s)); err == nil {
-		key.styleJSON = string(styleJSON)
-	}
-	build := m.build
-	if build == nil {
-		build = defaultMarkdownBuild
+	ascii := !s.ColorsEnabled()
+	key := markdownRendererKey{ascii: ascii}
+	var build func(*Styles) (markdownTermRenderer, error)
+	if ascii {
+		key.themeID = "ascii"
+		build = func(*Styles) (markdownTermRenderer, error) {
+			return buildMarkdownStyle(buildASCIIStyle(), "terminal16m")
+		}
+	} else {
+		key.themeID = s.Palette().ID
+		if styleJSON, err := json.Marshal(markdownStyle(s)); err == nil {
+			key.styleJSON = string(styleJSON)
+		}
+		build = m.build
+		if build == nil {
+			build = defaultMarkdownBuild
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
