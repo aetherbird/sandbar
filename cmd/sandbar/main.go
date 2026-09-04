@@ -803,21 +803,29 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastToolName = ""
 			m.clearSubagentHUD()
 			m.clearApprovals("turn completed")
-			// Turn-end prints run as one ordered Sequence: the commit may be a
-			// multi-chunk payload, and a footer (or any concurrent print) landing
-			// between its chunks splices the frame into the middle of the text.
-			var turnEnd []tea.Cmd
-			if m.hadToolTurn {
-				// Tool calls occurred — text was printed inline.
-				if cmd := m.flushTokens(true); cmd != nil {
-					turnEnd = append(turnEnd, cmd)
+			// Turn end prints as ONE atomic tea.printf: the commit plus footer
+			// in a single body. A Sequence of separate printfs leaves chunk
+			// boundaries that frame repaints (typing, spinner ticks) splice
+			// into — the input box lands mid-answer. One insertAbove cannot
+			// be interleaved with anything.
+			{
+				var body string
+				if m.hadToolTurn {
+					// Tool calls occurred — text was printed inline; only the
+					// buffered tail remains.
+					if tail := strings.TrimRight(string(m.tokBuf), "\n"); tail != "" {
+						if s := m.marginProse(tail); s != "" {
+							body = s + "\n"
+						}
+					}
+					m.tokBuf = m.tokBuf[:0]
+				} else {
+					// Pure text response — render through glamour markdown.
+					body = m.commitResponseBody()
 				}
-			} else {
-				// Pure text response — render through glamour markdown.
-				turnEnd = append(turnEnd, m.printResponse())
+				body += "\n" + msg.footer
+				cmds = append(cmds, tea.Printf("%s", wrapForPrint(body, m.printWidth())))
 			}
-			turnEnd = append(turnEnd, m.printLine("\n"+msg.footer))
-			cmds = append(cmds, tea.Sequence(turnEnd...))
 			cmds = append(cmds, m.contextCmd())
 			// Messages the user sent mid-turn that could not steer (empty
 			// thread ID, queue endpoint unavailable) were stashed in
@@ -4075,6 +4083,27 @@ func (m *appModel) refreshLiveRender() {
 	}
 	m.liveRendered = renderStoredAssistant(string(m.responseBuf), m.printWidth())
 	m.liveDirty = false
+}
+
+// commitResponseBody builds the transcript block for a completed pure-text
+// turn: the label plus the final glamour rendering, exactly as
+// renderLastExchange shapes a resumed exchange. It clears the live-block
+// state; the caller owns the actual print.
+func (m *appModel) commitResponseBody() string {
+	text := string(m.responseBuf)
+	label := m.liveLabel
+	m.liveLabel = false
+	m.liveRendered = ""
+	m.liveDirty = false
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	var b strings.Builder
+	if label {
+		b.WriteString("\n\n" + sty(cPurple).Bold(true).Render("◈ sandbar") + "\n")
+	}
+	b.WriteString(renderStoredAssistant(text, m.printWidth()))
+	return b.String()
 }
 
 // printResponse commits the streamed assistant text to the transcript: one
