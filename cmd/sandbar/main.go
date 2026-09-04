@@ -819,6 +819,15 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			turnEnd = append(turnEnd, m.printLine("\n"+msg.footer))
 			cmds = append(cmds, tea.Sequence(turnEnd...))
 			cmds = append(cmds, m.contextCmd())
+			// Messages the user sent mid-turn that could not steer (empty
+			// thread ID, queue endpoint unavailable) were stashed in
+			// pendingSends. They must not strand here: the turn is over, so
+			// the next one fires now — the user's words are never swallowed.
+			if len(m.pendingSends) > 0 {
+				next := m.pendingSends[0]
+				m.pendingSends = m.pendingSends[1:]
+				cmds = m.startStream(next, cmds)
+			}
 			if m.sess.planMode {
 				// A plan turn just completed: the server marked the thread
 				// pending_approval. Plan mode disengages here — what happens
@@ -1974,9 +1983,13 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 			case "thread":
 				// Thread identity announced at turn start — capture it so the
 				// end-of-stream "threadID" item fires even when the turn is
-				// interrupted before the terminal "done" event.
+				// interrupted before the terminal "done" event, AND forward it
+				// immediately: mid-turn steering (EnqueueUserMessage) needs the
+				// thread ID during the FIRST turn, or queued messages silently
+				// fall into pendingSends and are never delivered.
 				if ev.ThreadID != "" {
 					tid = ev.ThreadID
+					ch <- streamItem{kind: "threadID", content: ev.ThreadID}
 				}
 
 			case "done":
