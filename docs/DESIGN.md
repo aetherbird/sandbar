@@ -324,6 +324,7 @@ host). Hosts beginning with `-` are rejected (ssh option-injection guard).
 - **Default fallback persona** (when neither is set): "You are Sandbar, a precise agentic assistant. You help the user get real work done: inspect, build, repair, explain, document, and carry the task forward…" (compact form; see `internal/config/config.go`).
 - **Skills:** `.sandbar/skills/<name>/SKILL.md` in the workspace is advertised by name + `description:` line in a `# Skills` prompt section (capped at 20); the model reads the full SKILL.md with `file_read` only when a task matches. No restart or config change needed to add or edit a skill.
 - **Reasoning effort:** `--effort low|medium|high` (CLI) or `/effort` (session) sets the per-turn OpenAI-style `reasoning_effort`; empty means provider default. Not persisted — each turn may differ.
+- **TROPICAL mode:** `/tropical` (or `/effort tropical`, or `--effort tropical` at launch) engages max-depth reasoning plus enforced parallel subagent use. The wire effort maps to `high` and a heavy-subagent directive is injected; background `delegate_task` fan-out is capped per thread (`subagent.tropical_max_concurrent`, default 8) and per turn (`subagent.tropical_max_total_per_turn`, default 32) — further spawns error with guidance to resume or consolidate. Subagents run at `high` effort. A tropical turn that used subagents must end with a fresh review delegation; otherwise the model gets one verification nudge before completing.
 - **Plan mode:** `--plan` / `/plan` runs a turn read-only: a PLAN MODE directive is appended to the system prompt, and write/exec-tier tool calls are denied at dispatch (after per-argument tier resolution, so e.g. `git add` is blocked while `git status` passes). The resulting plan is stored durably and can be approved or rejected from the session picker. Context files are trusted as the operator's own instructions; no heuristic injection scan is applied to them.
 
 ---
@@ -397,7 +398,7 @@ Flags:
                           running an agent turn (requires --json and --model)
   --plan                  Plan mode: read-only investigation; present a plan
                           instead of changing anything
-  --effort                Reasoning effort for this run: low, medium, or high
+  --effort                Reasoning effort for this run: low, medium, high, or tropical
   --tools                 Restrict this run to these tools, comma-separated;
                           the rest are not advertised to the model
   --disable-subagents     Omit delegate_task and resume_task entirely

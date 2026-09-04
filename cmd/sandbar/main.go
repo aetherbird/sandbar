@@ -1777,13 +1777,13 @@ func (m *appModel) launchStreamGoroutine(input string, ch chan<- streamItem) {
 			ch <- streamItem{kind: "err", err: errors.New("CLI backend is not configured")}
 			return
 		}
-		// Tropical mode travels as the effort string; the agent maps it to
-		// high effort plus the heavy-subagent system directive.
-		effort := m.sess.effort
+		// Tropical mode travels as a context flag (see WithTropicalRequest);
+		// the agent maps it to high effort plus the heavy-subagent system
+		// directive.
 		if m.sess.tropical {
-			effort = "tropical"
+			ctx = agent.WithTropicalRequest(ctx)
 		}
-		events, err := streamBackend.SendMessage(ctx, threadID, modelAlias, input, effort, m.sess.planMode)
+		events, err := streamBackend.SendMessage(ctx, threadID, modelAlias, input, m.sess.effort, m.sess.planMode)
 		if err != nil {
 			ch <- streamItem{kind: "err", err: err}
 			return
@@ -3788,6 +3788,10 @@ func runOneShot(be backend.Backend, cfg *config.Config, modelAlias, resumeID, me
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = agent.WithRequestSource(ctx, "cli")
+	if strings.TrimSpace(effort) == "tropical" {
+		ctx = agent.WithTropicalRequest(ctx)
+		effort = "high"
+	}
 	events, err := be.SendMessage(ctx, resumeID, modelAlias, message, effort, plan)
 	if err != nil {
 		return err

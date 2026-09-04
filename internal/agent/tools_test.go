@@ -112,6 +112,23 @@ func (r *countingSubagentRunner) count() int {
 	return r.calls
 }
 
+// instantSubagentRunner completes every spawn immediately with canned output.
+type instantSubagentRunner struct{}
+
+func (instantSubagentRunner) SpawnSubagent(_ context.Context, goal, _ string) (<-chan tools.SubagentEvent, error) {
+	ch := make(chan tools.SubagentEvent, 1)
+	ch <- tools.SubagentEvent{Type: "done", Content: "result for " + goal}
+	close(ch)
+	return ch, nil
+}
+
+func (instantSubagentRunner) ResumeSubagent(_ context.Context, taskID string) (<-chan tools.SubagentEvent, error) {
+	ch := make(chan tools.SubagentEvent, 1)
+	ch <- tools.SubagentEvent{Type: "done", Content: "resumed " + taskID}
+	close(ch)
+	return ch, nil
+}
+
 func TestAgentWithoutSubagentsOmitsSchemasAndFailsClosed(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -650,6 +667,94 @@ func TestAgentDelegateTasksRunConcurrentlyAndTagProgress(t *testing.T) {
 	}
 	if !seen["delegate_1"] || !seen["delegate_2"] {
 		t.Fatalf("subagent progress was not tagged by parent call: %v", progressIDs)
+	}
+}
+
+// TestTropicalVerifyNudgeFiresOnce pins the Step 4 gate: a tropical turn
+// whose last tool round did direct work (not a fresh delegation) gets exactly
+// one verification nudge round before completing; a tropical turn ending in a
+// delegation round completes clean; a non-tropical turn never nudges.
+func TestTropicalVerifyNudgeFiresOnce(t *testing.T) {
+	// Round 0 mixes a delegation with direct work, so the last tool round is
+	// NOT a fresh delegation round — the gate must fire exactly once.
+	// (shell_exec is batch-sequential, and the batch path executes rounds
+	// in provider order, so the trace is deterministic.)
+	delegatePlusExec := `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"r1","type":"function","function":{"name":"shell_exec","arguments":"{\"command\":\"echo hi\"}"}},{"id":"d1","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"do work\"}"}}]},"finish_reason":"tool_calls"}]}`
+	finalText := `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"final answer"},"finish_reason":"stop"}]}`
+
+	tests := []struct {
+		name       string
+		tropical   bool
+		script     []string // provider responses in order; finalText serves once exhausted
+		wantNudges int      // whether the verify prompt is injected (0/1)
+	}{
+		{
+			// Mixed round, then terminal text: the terminal branch fires
+			// the gate (last round was not delegation-only), the nudge
+			// goes out, and the repeated terminal text completes.
+			name:       "tropical direct finish gets one nudge",
+			tropical:   true,
+			script:     []string{delegatePlusExec},
+			wantNudges: 1,
+		},
+		{
+			name:     "tropical delegation finish needs no nudge",
+			tropical: true,
+			script: []string{
+				`{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"d1","type":"function","function":{"name":"delegate_task","arguments":"{\"goal\":\"review everything\"}"}}]},"finish_reason":"tool_calls"}]}`,
+				finalText,
+			},
+			wantNudges: 0,
+		},
+		{
+			name:       "non-tropical never nudges",
+			tropical:   false,
+			script:     []string{delegatePlusExec, finalText},
+			wantNudges: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			callCount := 0
+			nudges := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				// Count the nudge once: it persists in history, so every
+				// subsequent request contains it. Only the first sighting is
+				// the injection.
+				if nudges == 0 && strings.Contains(string(body), "fresh review pass") {
+					nudges = 1
+				}
+				resp := finalText
+				if callCount < len(tc.script) {
+					resp = tc.script[callCount]
+				}
+				callCount++
+				mu.Unlock()
+				respondJSONBody(w, body, resp)
+			}))
+			defer ts.Close()
+
+			agent, _, cleanup := setupTestAgent(t, true)
+			defer cleanup()
+			agent.cfg.Providers[0].BaseURL = ts.URL
+			agent.cfg.Persona.TitleModel = "missing-title-model"
+			agent.tools.SetSubagentRunner(instantSubagentRunner{})
+			workspace := t.TempDir()
+
+			req := Request{ModelAlias: "test-model", UserMessage: "go", Workspace: workspace, Tropical: tc.tropical}
+			if _, err := agent.Chat(context.Background(), req, func(llm.StreamEvent) error { return nil }); err != nil {
+				t.Fatalf("chat: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if nudges != tc.wantNudges {
+				t.Fatalf("verify nudges = %d, want %d", nudges, tc.wantNudges)
+			}
+		})
 	}
 }
 

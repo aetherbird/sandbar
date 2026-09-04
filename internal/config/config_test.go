@@ -505,3 +505,27 @@ mcp_servers:
 		})
 	}
 }
+
+func TestTropicalLimitResolution(t *testing.T) {
+	def := SubagentConfig{}
+	if got := def.TropicalConcurrencyLimit(); got != DefaultTropicalMaxConcurrent {
+		t.Errorf("default concurrency: got %d, want %d", got, DefaultTropicalMaxConcurrent)
+	}
+	if got := def.TropicalTotalLimit(); got != DefaultTropicalMaxTotalPerTurn {
+		t.Errorf("default total: got %d, want %d", got, DefaultTropicalMaxTotalPerTurn)
+	}
+	custom := SubagentConfig{TropicalMaxConcurrent: 4, TropicalMaxTotalPerTurn: 10}
+	if got := custom.TropicalConcurrencyLimit(); got != 4 {
+		t.Errorf("custom concurrency: got %d, want 4", got)
+	}
+	if got := custom.TropicalTotalLimit(); got != 10 {
+		t.Errorf("custom total: got %d, want 10", got)
+	}
+	unlim := SubagentConfig{TropicalMaxConcurrent: -1, TropicalMaxTotalPerTurn: -1}
+	if got := unlim.TropicalConcurrencyLimit(); got != -1 {
+		t.Errorf("unlimited concurrency: got %d, want -1", got)
+	}
+	if got := unlim.TropicalTotalLimit(); got != -1 {
+		t.Errorf("unlimited total: got %d, want -1", got)
+	}
+}

@@ -87,3 +87,8 @@ subagent:
   max_turns: 30
   # Tools sub-agents can use (default: all read-only tools + shell).
   tools: ["file_read", "search_files", "web_search", "web_fetch", "shell_exec"]
+  # TROPICAL-mode background fan-out caps. Concurrency is per thread
+  # (background tasks outlive the turn); total is per turn. 0 = defaults
+  # (8 concurrent, 32 per turn); negative = unlimited.
+  tropical_max_concurrent: 0
+  tropical_max_total_per_turn: 0

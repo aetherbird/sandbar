@@ -75,3 +75,17 @@ func EffortFromContext(ctx context.Context) string {
 	effort, _ := ctx.Value(effortKey{}).(string)
 	return effort
 }
+
+type tropicalKey struct{}
+
+// WithTropical marks the context as a Tropical-mode turn so subagent runners
+// can force high effort regardless of the inherited effort value.
+func WithTropical(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tropicalKey{}, true)
+}
+
+// TropicalFromContext reports whether the context belongs to a Tropical turn.
+func TropicalFromContext(ctx context.Context) bool {
+	t, _ := ctx.Value(tropicalKey{}).(bool)
+	return t
+}

@@ -114,16 +114,52 @@ func delegateTask(runner SubagentRunner, ctx context.Context, args map[string]in
 		if effort := EffortFromContext(ctx); effort != "" {
 			bgCtx = WithEffort(bgCtx, effort)
 		}
+		// The background context is rebuilt from scratch: propagate the
+		// Tropical flag explicitly or tropical background subagents lose it.
+		if TropicalFromContext(ctx) {
+			bgCtx = WithTropical(bgCtx)
+		}
+		// Check the per-turn total BEFORE acquiring a concurrency slot: both
+		// error paths below must return any acquired slot, and ordering the
+		// checks this way keeps the failure accounting obvious.
+		if err := TropicalTotalFromContext(ctx).TryIncrement(); err != nil {
+			if sink != nil {
+				sink(SubagentEvent{Type: "error", ToolCallID: toolCallID, TaskID: taskID, Goal: goal, Status: "failed", Content: err.Error(), Err: err})
+			}
+			return "", err
+		}
+		if lim := TropicalLimiterFromContext(ctx); lim != nil {
+			// Capture the limiter pointer before detaching: the drainer below
+			// decrements it when the subagent's channel closes, which is the
+			// subagent's terminal moment.
+			if err := lim.TryAcquire(); err != nil {
+				if sink != nil {
+					sink(SubagentEvent{Type: "error", ToolCallID: toolCallID, TaskID: taskID, Goal: goal, Status: "failed", Content: err.Error(), Err: err})
+				}
+				return "", err
+			}
+			bgCtx = WithTropicalLimiter(bgCtx, lim)
+		}
 		bgCtx = WithSubagentTaskID(bgCtx, taskID)
 		events, err := runner.SpawnSubagent(bgCtx, goal, contextStr)
 		if err != nil {
+			// The spawn never started: return the slot (the drainer below
+			// only runs on a live channel) so failures don't permanently
+			// consume thread-scoped concurrency.
+			if lim := TropicalLimiterFromContext(bgCtx); lim != nil {
+				lim.Release()
+			}
 			if sink != nil {
 				sink(SubagentEvent{Type: "error", ToolCallID: toolCallID, TaskID: taskID, Goal: goal, Status: "failed", Content: err.Error(), Err: err})
 			}
 			return "", fmt.Errorf("spawn background subagent: %w", err)
 		}
+		releaseLimiter := TropicalLimiterFromContext(bgCtx)
 		go func() {
 			for range events {
+			}
+			if releaseLimiter != nil {
+				releaseLimiter.Release()
 			}
 		}()
 		if sink != nil {

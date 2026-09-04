@@ -43,6 +43,12 @@ const todoNudgeAfterRounds = 12
 
 const todoNudgePrompt = "[Reminder: you have an active task list for this thread — update it or mark items complete as you make progress.]"
 
+// tropicalVerifyPrompt is the one-time Tropical verification nudge: a tropical
+// turn that used subagents must end with a fresh review delegation, not a
+// direct summary of its own work. Synthetic and never persisted, like the
+// todo nudge. Fires at most once per turn.
+const tropicalVerifyPrompt = "[Tropical mode: you used sub-agent delegations this turn. Before your final summary, delegate one fresh review pass (delegate_task or resume_task) over the combined results so completion is verified by independent work, not your own summary.]"
+
 // planApprovedPrompt is injected once, on the turn immediately after the user
 // approves a pending plan (memory.PlanModeApproved), then cleared.
 const planApprovedPrompt = "[The user approved this plan. Execute it now, updating the task list as you complete each step.]"
@@ -76,6 +82,10 @@ type Agent struct {
 	// once per agent instead of on every file tool call under it.
 	instrMu       sync.Mutex
 	injectedInstr map[string]bool
+	// tropicalLimiters holds one concurrency limiter per thread ID so
+	// tropical background fan-out is bounded across turns on the same
+	// thread (background tasks outlive the turn that spawned them).
+	tropicalLimiters sync.Map
 }
 
 type threadTurnLock struct {
@@ -287,8 +297,12 @@ func (a *Agent) SpawnSubagent(ctx context.Context, goal, contextStr string) (<-c
 		}
 		turn := 0
 		var loopGuard toolLoopGuard
-		// Inherit the parent turn's reasoning effort.
+		// Inherit the parent turn's reasoning effort. Tropical turns force
+		// high regardless of the inherited value.
 		effort := tools.EffortFromContext(ctx)
+		if tools.TropicalFromContext(ctx) {
+			effort = "high"
+		}
 		sendError := func(content string, err error) {
 			partialWithManifest := partial.String()
 			if manifest := ft.Manifest(); manifest != "" {
@@ -526,10 +540,14 @@ type Request struct {
 	UserMessage string
 	Workspace   string
 	Source      string // "cli", "web", etc. — used to tailor output formatting
-	// Effort is the per-turn reasoning effort: "low", "medium", or "high".
+	// Effort is the per-turn wire reasoning effort: "low", "medium", or "high".
 	// Empty means the provider default. Not persisted — a follow-up turn may
-	// set a different effort.
+	// set a different effort. "tropical" is accepted as a legacy alias for
+	// Tropical mode (mapped to high + directive); prefer Tropical: true.
 	Effort string
+	// Tropical engages Tropical mode: wire effort maps to high and the
+	// heavy-subagent directive is injected. A session mode, not a wire effort.
+	Tropical bool
 	// PlanOnly runs the turn in plan mode: read-tier tools only (enforced at
 	// dispatch), plus a prompt directive to investigate and present a plan
 	// instead of making changes. The follow-up turn executes normally.
@@ -544,10 +562,22 @@ func ValidateEffort(effort string) error { return validateEffort(effort) }
 // (e.g. the CLI's Backend.SendMessage signature has no source parameter).
 type requestSourceCtxKey struct{}
 
+// tropicalRequestCtxKey carries the Tropical session-mode flag through a
+// caller's context. Backend.SendMessage takes effort as a plain string, so
+// the CLI annotates tropical turns this way instead of growing the Backend
+// interface (same idiom as requestSourceCtxKey above).
+type tropicalRequestCtxKey struct{}
+
 // WithRequestSource annotates a context with the request source. Chat honors
 // it only when Request.Source itself is empty, so an explicit field wins.
 func WithRequestSource(ctx context.Context, source string) context.Context {
 	return context.WithValue(ctx, requestSourceCtxKey{}, source)
+}
+
+// WithTropicalRequest annotates a context as a Tropical-mode turn. Chat
+// honors it when Request.Tropical is false, so an explicit field wins.
+func WithTropicalRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tropicalRequestCtxKey{}, true)
 }
 
 // RequestSourceFrom returns the source annotated with WithRequestSource, or ""
@@ -573,6 +603,11 @@ func validateEffort(effort string) error {
 func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEvent) error) (string, error) {
 	if req.Source == "" {
 		req.Source = RequestSourceFrom(ctx)
+	}
+	if !req.Tropical {
+		if v, _ := ctx.Value(tropicalRequestCtxKey{}).(bool); v {
+			req.Tropical = true
+		}
 	}
 	resolved, err := a.registry.ResolveModel(req.ModelAlias)
 	if err != nil {
@@ -644,10 +679,12 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		return thread.ID, err
 	}
 
-	// Build LLM message history. "tropical" is a session mode, not a wire
+	// Build LLM message history. Tropical is a session mode, not a wire
 	// effort: it maps to high and injects the heavy-subagent directive.
+	// The legacy "tropical" effort string is accepted as a Tropical alias so
+	// older transports keep working; prefer Request.Tropical.
 	effort := req.Effort
-	tropical := effort == "tropical"
+	tropical := req.Tropical || effort == "tropical"
 	if tropical {
 		effort = "high"
 	}
@@ -730,12 +767,37 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 	}
 	// Carry the turn's effort so subagents inherit it instead of the provider default.
 	ctx = tools.WithEffort(ctx, effort)
+	// Carry the Tropical flag so subagent runners force high effort and fan-out
+	// caps apply even to background tasks rebuilt onto a fresh context.
+	if tropical {
+		ctx = tools.WithTropical(ctx)
+		// Thread-scoped concurrency limiter: background tasks outlive the
+		// turn, so a per-turn limiter would under-throttle (each new turn
+		// gets a fresh budget while older tasks still run). The per-turn
+		// spawn total below is still scoped to this Chat call.
+		if v, _ := a.tropicalLimiters.LoadOrStore(thread.ID, tools.NewTropicalLimiter(a.cfg.Subagent.TropicalConcurrencyLimit())); v != nil {
+			if lim, ok := v.(*tools.TropicalLimiter); ok {
+				ctx = tools.WithTropicalLimiter(ctx, lim)
+			}
+		}
+		ctx = tools.WithTropicalTotal(ctx, tools.NewTropicalTotal(a.cfg.Subagent.TropicalTotalLimit()))
+	}
 	turn := 0
 	var loopGuard toolLoopGuard
 	// Counts consecutive tool-call rounds that never touch the todo tool; the
 	// nudge itself fires at most once per turn.
 	toolRoundsWithoutTodo := 0
 	todoNudgeSent := false
+	// Tropical verification state: whether the turn spawned any subagent and
+	// whether the model's latest tool round ended with a fresh delegation
+	// (the structural verification signal — a final delegation after all
+	// other tool work reads as a fresh review pass).
+	tropicalVerifyNudgeSent := false
+	tropicalSpawnedSubagent := false
+	// Whether the most recent tool round was a fresh delegation round (no
+	// direct work in it). Recomputed every round so only the LAST round
+	// before wrap-up counts.
+	lastRoundDelegationOnly := false
 	for {
 		if turnLimitReached(turn, a.cfg.MaxTurns) {
 			return thread.ID, onEvent(llm.StreamEvent{Type: "error", Content: "max turn limit reached"})
@@ -908,12 +970,31 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 				// durable task list — remind the model once per turn to keep
 				// that list current. Synthetic and never persisted.
 				todoTouched := false
+				delegateTouched := false
+				roundDelegationOnly := true
 				for _, tc := range result.ToolCalls {
-					if tc.Function.Name == "todo" {
+					if tc.Type != openai.ToolTypeFunction {
+						continue
+					}
+					switch tc.Function.Name {
+					case "todo":
 						todoTouched = true
-						break
+						roundDelegationOnly = false
+					case "delegate_task", "resume_task":
+						delegateTouched = true
+					default:
+						roundDelegationOnly = false
 					}
 				}
+				// Tropical verification signal (structural, not lexical): the
+				// model's latest tool round is a fresh delegation round — no
+				// direct work in it. Recomputed every round so only the LAST
+				// round before wrap-up counts; a delegation round mid-turn
+				// followed by more direct work does not satisfy it.
+				if delegateTouched {
+					tropicalSpawnedSubagent = true
+				}
+				lastRoundDelegationOnly = delegateTouched && roundDelegationOnly
 				if todoTouched {
 					toolRoundsWithoutTodo = 0
 				} else {
@@ -995,6 +1076,29 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 			// than discarding it and issuing a second, tools-free streaming call.
 			// When the deltas already streamed live, only the terminal event
 			// remains to emit — re-emitting the content would duplicate it.
+			//
+			// Tropical verification gate: a tropical turn that spawned
+			// subagents must end with a fresh delegation round (see
+			// lastRoundDelegationOnly above). Otherwise inject the nudge once
+			// and loop back instead of completing. NOTE: in the live-streaming
+			// path the final answer has already streamed to the user before
+			// this decision — the user sees a complete answer, then a forced
+			// verification round, then a revised answer. Designed behavior:
+			// auditable, and --json consumers will see two completions.
+			if tropical && tropicalSpawnedSubagent && !lastRoundDelegationOnly && !tropicalVerifyNudgeSent {
+				tropicalVerifyNudgeSent = true
+				indexedMsgs = append(indexedMsgs, indexedMessage{
+					Seq:       0,
+					Synthetic: true,
+					Kind:      "tropical_verify_nudge",
+					Msg: openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleUser,
+						Content: tropicalVerifyPrompt,
+					},
+				})
+				llmMessages = toRawMessages(indexedMsgs)
+				continue
+			}
 			err = a.emitAndPersistCompletion(thread.ID, result.Content, onEvent, streamedLive)
 			if err == nil && thread.Title == nil {
 				go a.maybeGenerateTitle(thread.ID, req.ModelAlias)
@@ -1004,6 +1108,8 @@ func (a *Agent) Chat(ctx context.Context, req Request, onEvent func(llm.StreamEv
 		}
 
 		// Streaming turn (no tools or follow-up after tool execution).
+		// No subagents can have run on this path (any tool call takes the
+		// branch above), so the tropical verification gate cannot trigger.
 		err = a.streamAndPersist(ctx, client, thread.ID, llmMessages, onEvent, effort)
 		if err == nil && thread.Title == nil {
 			go a.maybeGenerateTitle(thread.ID, req.ModelAlias)
@@ -1758,8 +1864,13 @@ func (a *Agent) ResumeSubagent(ctx context.Context, taskID string) (<-chan tools
 		}
 
 		var loopGuard toolLoopGuard
-		// Inherit the parent turn's reasoning effort via the resume_task context.
+		// Inherit the parent turn's reasoning effort via the resume_task
+		// context. Tropical turns force high regardless of the inherited
+		// value (mirrors SpawnSubagent).
 		effort := tools.EffortFromContext(ctx)
+		if tools.TropicalFromContext(ctx) {
+			effort = "high"
+		}
 		for turnCount := 0; remainingTurns == 0 || turnCount < remainingTurns; turnCount++ {
 			runningTurn++
 			if resolved.SupportsTools && filteredTools != nil {

@@ -173,6 +173,44 @@ type SubagentConfig struct {
 	Model    string   `yaml:"model"`     // model alias for sub-agents (default: deepseek/deepseek-v4-flash)
 	MaxTurns int      `yaml:"max_turns"` // 0 = unlimited; positive values cap sub-agent turns
 	Tools    []string `yaml:"tools"`     // tools sub-agents can use (default: all read-only tools + shell)
+	// TropicalMaxConcurrent caps concurrently running background subagents in
+	// Tropical mode. 0 = default (8); negative = unlimited.
+	TropicalMaxConcurrent int `yaml:"tropical_max_concurrent"`
+	// TropicalMaxTotalPerTurn caps background subagent spawns per Tropical
+	// turn. 0 = default (32); negative = unlimited.
+	TropicalMaxTotalPerTurn int `yaml:"tropical_max_total_per_turn"`
+}
+
+// DefaultTropicalMaxConcurrent is the default cap on concurrently running
+// tropical background subagents (mirrors the Claude Code workflow ceiling).
+const DefaultTropicalMaxConcurrent = 8
+
+// DefaultTropicalMaxTotalPerTurn is the default cap on tropical background
+// subagent spawns per turn.
+const DefaultTropicalMaxTotalPerTurn = 32
+
+// TropicalConcurrencyLimit resolves the effective concurrency cap:
+// negative = unlimited, 0 = default, positive = as configured.
+func (s SubagentConfig) TropicalConcurrencyLimit() int {
+	if s.TropicalMaxConcurrent < 0 {
+		return -1
+	}
+	if s.TropicalMaxConcurrent == 0 {
+		return DefaultTropicalMaxConcurrent
+	}
+	return s.TropicalMaxConcurrent
+}
+
+// TropicalTotalLimit resolves the effective per-turn total cap:
+// negative = unlimited, 0 = default, positive = as configured.
+func (s SubagentConfig) TropicalTotalLimit() int {
+	if s.TropicalMaxTotalPerTurn < 0 {
+		return -1
+	}
+	if s.TropicalMaxTotalPerTurn == 0 {
+		return DefaultTropicalMaxTotalPerTurn
+	}
+	return s.TropicalMaxTotalPerTurn
 }
 
 // Load reads and validates a config file.
