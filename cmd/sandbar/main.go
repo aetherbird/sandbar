@@ -507,14 +507,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sized = true
 
 	case tickMsg:
-		// Tick fast while streaming so the spinner animates; slow when idle.
+		// Tick fast while streaming OR while background sub-agents run, so
+		// spinners stay animated — a frozen indicator reads as dead work when
+		// delegated agents are actually running. Slow only when truly idle.
 		interval := time.Second
-		if m.streaming {
+		if m.streaming || len(m.bgTasks) > 0 {
 			m.spinIdx++
 			interval = 120 * time.Millisecond
-			if !m.hadToolTurn && len(m.responseBuf) > 0 {
+			if m.streaming && !m.hadToolTurn && len(m.responseBuf) > 0 {
 				// Progressive markdown: re-render the buffer into the
-				// in-frame live block. No tea.Printf — the renderer repaints
+				// in-frame live block. No tea.printf — the renderer repaints
 				// the frame itself, so nothing can drift.
 				m.refreshLiveRender()
 			}
@@ -553,6 +555,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// boundary), or as an automatic follow-up turn when idle.
 		goal := m.bgTasks[msg.taskID]
 		delete(m.bgTasks, msg.taskID)
+		m.updateSubagentHUD(streamItem{taskID: msg.taskID, taskStatus: firstNonEmpty(msg.status, "failed")})
 		if msg.err != nil {
 			cmds = append(cmds, m.printLine("\n"+sty(cWarn).Render("  ⚠ background task "+shortID(msg.taskID)+": "+msg.err.Error())))
 			return m, tea.Batch(cmds...)

@@ -60,8 +60,21 @@ func (m *appModel) updateSubagentHUD(item streamItem) {
 }
 
 func (m *appModel) clearSubagentHUD() {
-	clear(m.subagents)
-	m.subagentOrder = m.subagentOrder[:0]
+	// Background delegations outlive the turn and must keep their HUD rows —
+	// they are the on-screen record of live work between turns.
+	for id := range m.subagents {
+		if _, bg := m.bgTasks[id]; bg {
+			continue
+		}
+		delete(m.subagents, id)
+	}
+	kept := m.subagentOrder[:0]
+	for _, id := range m.subagentOrder {
+		if _, ok := m.subagents[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	m.subagentOrder = kept
 }
 
 func (m appModel) subagentHUDView() string {

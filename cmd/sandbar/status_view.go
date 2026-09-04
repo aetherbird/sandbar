@@ -19,6 +19,12 @@ func (m appModel) turnActivity() (spinner, duration string) {
 	case m.streaming:
 		spinner = spinFrames[m.spinIdx%len(spinFrames)]
 		duration = fmtDur(time.Since(m.turnStart))
+	case len(m.bgTasks) > 0:
+		// Background sub-agents are running between turns: keep the spinner
+		// alive and say how many, instead of a frozen stale duration.
+		spinner = spinFrames[m.spinIdx%len(spinFrames)]
+		n := len(m.bgTasks)
+		duration = fmt.Sprintf("%d agent%s", n, map[bool]string{true: "s", false: ""}[n != 1])
 	case m.turnDur > 0:
 		duration = fmtDur(m.turnDur)
 	}
